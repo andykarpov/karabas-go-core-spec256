@@ -1,0 +1,24 @@
+{
+    "id": "spec256",
+    "name": "Spec256",
+    "build": "26020120",
+    "bitstream": "karabas_minig.bin",
+    "visible": true,
+    "type": "osd",
+    "order": 10,
+    "eeprom_bank": 255,
+    "roms": [
+        {"filename": "roms/82.rom", "address": 0}
+    ],
+    "osd": [
+        {"type": "P", "name": "Please choose a snapshot to"},
+        {"type": "P", "name": "load into the the RAM"},
+        {"type": "FL", "name": "Snapshot", "slot": 1, "extensions": ".256", "hotkey": "Menu+T"},
+        {"type": "P", "name": ""},
+        {"type": "S", "name": "Joystick L", "options": ["Kempston", "Sinclair1", "Sinclair2", "Cursor", "QAOPM", "QAOPS"], "default": 0, "hotkey": "Menu+J"},
+        {"type": "S", "name": "Joystick R", "options": ["Kempston", "Sinclair1", "Sinclair2", "Cursor", "QAOPM", "QAOPS"], "default": 1, "hotkey": "Menu+R"},
+        {"type": "N", "name": "Pause", "options": ["Off", "On"], "default": 0, "hotkey": "Menu+P"},
+        {"type": "T", "name": "NMI", "hotkey": "Menu+F12"},
+        {"type": "T", "name": "Reset", "hotkey": "Ctrl+Alt+Del"}
+    ]
+}
