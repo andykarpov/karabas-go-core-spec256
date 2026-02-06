@@ -107,6 +107,8 @@ package T80_Pack is
 		Stop            : out std_logic;
 		R800_mode       : in  std_logic := '0';
 		out0            : in  std_logic := '0';  -- 0 => OUT(C),0, 1 => OUT(C),255
+		IR_O       		 : out std_logic_vector(7 downto 0);
+      PC_O       		 : out std_logic_vector(15 downto 0);		
 		REG             : out std_logic_vector(211 downto 0); -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
 		DIRSet          : in  std_logic := '0';
 		DIR             : in  std_logic_vector(211 downto 0) := (others => '0') -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A

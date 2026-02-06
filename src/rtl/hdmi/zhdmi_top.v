@@ -1,6 +1,5 @@
 `timescale 1ns / 1ps
 `default_nettype none
-`define FORCE_DVI 1
 
 module zhdmi_top(
 
@@ -44,7 +43,6 @@ hdmi_pll hdmi_pll (
 reg signed [23:0] hdmi_audio_l, hdmi_audio_r;
 wire audio_clk;
 
-`ifndef FORCE_DVI
 audio_samplerate #(.SAMPLERATE(SAMPLERATE), .CLKRATE(CLKRATE)) audio_samplerate(
 	.clk(p_clk_int),
 	.reset(reset),
@@ -57,10 +55,9 @@ always @(posedge p_clk_int) begin
 		hdmi_audio_r <= $signed(audio_r) * 256;
 	end
 end
-`endif
 
 // hdmi tx
-hdmi_tx #(.SAMPLE_FREQ(SAMPLERATE), .FORCE_DVI(`FORCE_DVI)) hdmi_tx(
+hdmi_tx #(.SAMPLE_FREQ(SAMPLERATE), .FORCE_DVI(0)) hdmi_tx(
 	.clk(p_clk_int),
 	.sclk(clk_hdmi),
 	.sclk_n(clk_hdmi_n),

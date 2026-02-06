@@ -123,6 +123,8 @@ entity T80 is
 		out0       : in  std_logic := '0';  -- 0 => OUT(C),0, 1 => OUT(C),255
 		REG        : out std_logic_vector(211 downto 0); -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
 
+        IR_O       : out std_logic_vector(7 downto 0);
+        PC_O       : out std_logic_vector(15 downto 0);
 		DIRSet     : in  std_logic := '0';
 		DIR        : in  std_logic_vector(211 downto 0) := (others => '0') -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
 	);
@@ -262,6 +264,9 @@ architecture rtl of T80 is
 	signal DOR                  : std_logic_vector(127 downto 0);
 
 begin
+
+    IR_O <= IR;
+    PC_O <= std_logic_vector(PC);
 
 	REG <= IntE_FF2 & IntE_FF1 & IStatus & DOR & std_logic_vector(PC) & std_logic_vector(SP) & std_logic_vector(R) & I & Fp & Ap & F & ACC when Alternate = '0'
 			 else IntE_FF2 & IntE_FF1 & IStatus & DOR(127 downto 112) & DOR(47 downto 0) & DOR(63 downto 48) & DOR(111 downto 64) &

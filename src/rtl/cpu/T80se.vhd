@@ -98,7 +98,12 @@ entity T80se is
 		DI              : in  std_logic_vector(7 downto 0);
 		DO              : out std_logic_vector(7 downto 0);
         DIRset          : in std_logic := '0';
-        DIR             : in std_logic_vector(211 downto 0) := (others => '0')
+        DIR             : in std_logic_vector(211 downto 0) := (others => '0');
+        REG             : out std_logic_vector(211 downto 0);
+        MC_O            : out std_logic_vector(2 downto 0);
+        TS_O            : out std_logic_vector(2 downto 0);
+        IR_O            : out std_logic_vector(7 downto 0);
+        PC_O            : out std_logic_vector(15 downto 0)
 	);
 end T80se;
 
@@ -113,6 +118,9 @@ architecture rtl of T80se is
 	signal TState       : std_logic_vector(2 downto 0);
 
 begin
+
+    MC_O <= MCycle;
+    TS_O <= TState;
 
 	u0 : T80
 		generic map(
@@ -139,7 +147,10 @@ begin
 			DO         => DO,
 			MC         => MCycle,
 			TS         => TState,
+            IR_O       => IR_O,
+            PC_O       => PC_O,
 			IntCycle_n => IntCycle_n,
+            REG        => REG,
             DIRset     => DIRset,
             DIR        => DIR);
 

@@ -87,12 +87,12 @@ port (
     DRAM_BA     : out std_logic_vector(1 downto 0);
     DRAM_A      : out std_logic_vector(12 downto 0);
     DRAM_DQ     : inout std_logic_vector(15 downto 0);
-	 
-	 -- SRAM
-	 MA			 : out std_logic_vector(20 downto 0);
-	 MD			 : inout std_logic_vector(15 downto 0);
-	 MRD_N		 : out std_logic_vector(1 downto 0);
-	 MWR_N		 : out std_logic_vector(1 downto 0)
+     
+    -- SRAM
+    MA          : out std_logic_vector(20 downto 0);
+    MD          : inout std_logic_vector(15 downto 0);
+    MRD_N       : out std_logic_vector(1 downto 0);
+    MWR_N       : out std_logic_vector(1 downto 0)
 );
 end spec256;
 
@@ -109,13 +109,24 @@ signal cpu_int_n     : std_logic;
 signal cpu_m1_n      : std_logic;
 signal cpu_nmi_n     : std_logic;
 signal cpu_ena       : std_logic;
-signal cpu_do        : std_logic_vector(63 downto 0);
-signal cpu_di        : std_logic_vector(63 downto 0);
+signal cpu_do        : std_logic_vector(7 downto 0);
+signal cpu_di        : std_logic_vector(7 downto 0);
+signal cpu_gfx_do    : std_logic_vector(63 downto 0);
+signal cpu_gfx_di    : std_logic_vector(63 downto 0);
+signal cpu_mc        : std_logic_vector(2 downto 0);
+signal cpu_ts        : std_logic_vector(2 downto 0);
+signal cpu_ir        : std_logic_vector(7 downto 0);
+signal cpu_pc        : std_logic_vector(15 downto 0);
+signal cpu_regs 		: std_logic_vector(211 downto 0);
+signal gfx_busy		: std_logic;
 
 -- Memory
 signal vram_wr       : std_logic;
+signal vram_gfx_wr   : std_logic;
 signal vram_addr     : std_logic_vector(12 downto 0);
-signal vram_di       : std_logic_vector(63 downto 0);
+signal vram_gfx_addr : std_logic_vector(12 downto 0);
+signal vram_di       : std_logic_vector(7 downto 0);
+signal vram_gfx_di   : std_logic_vector(63 downto 0);
 
 -- Ports
 signal port_xxfe_reg : std_logic_vector(7 downto 0);
@@ -140,13 +151,15 @@ signal romloader_act : std_logic := '0';
 signal romloader_do  : std_logic_vector(7 downto 0);
 signal romloader_a   : std_logic_vector(31 downto 0);
 signal romloader_wr  : std_logic := '0';
-signal romloader_do64: std_logic_vector(63 downto 0);
-signal romloader_a64 : std_logic_vector(15 downto 0);
-signal romloader_wr64: std_logic := '0';
 signal fileloader_act: std_logic := '0';
+signal fileloader_sna: std_logic := '0';
+signal fileloader_gfx: std_logic := '0';
 signal fileloader_do : std_logic_vector(7 downto 0);
 signal fileloader_a  : std_logic_vector(31 downto 0);
 signal fileloader_wr : std_logic := '0';
+signal fileloader_a8 : std_logic_vector(15 downto 0);
+signal fileloader_wr8: std_logic := '0';
+signal fileloader_do8: std_logic_vector(7 downto 0);
 signal fileloader_a64: std_logic_vector(15 downto 0);
 signal fileloader_wr64: std_logic := '0';
 signal fileloader_do64: std_logic_vector(63 downto 0);
@@ -158,12 +171,15 @@ signal softsw_command: std_logic_vector(15 downto 0);
 signal osd_command   : std_logic_vector(15 downto 0);
 signal kb_nmi        : std_logic := '0';
 signal kb_reset      : std_logic := '0';
-signal kb_pause		: std_logic := '0';
+signal kb_pause      : std_logic := '0';
+signal kb_video_mode : std_logic := '0';
 signal mcu_busy      : std_logic := '1';
 
 -- Video
 signal vga_addr      : std_logic_vector(12 downto 0);
-signal vga_data      : std_logic_vector(63 downto 0);
+signal vga_gfx_addr  : std_logic_vector(12 downto 0);
+signal vga_data      : std_logic_vector(7 downto 0);
+signal vga_gfx_data  : std_logic_vector(63 downto 0);
 signal vga_wr        : std_logic;
 signal vga_r         : std_logic_vector(7 downto 0);
 signal vga_g         : std_logic_vector(7 downto 0);
@@ -176,23 +192,22 @@ signal sync_blank    : std_logic;
 signal sync_int      : std_logic;
 
 -- CLOCK
---signal clk_vga       : std_logic; -- outer
 signal clk_tmds      : std_logic;
 signal clk_sdram     : std_logic;
 signal clk_sdram_out : std_logic;
 
 -- System
---signal reset         : std_logic; -- outer
---signal areset        : std_logic; -- outer
 signal selector      : std_logic_vector(2 downto 0);
 signal inta_n        : std_logic;
 
 -- SDRAM
-signal sdram_addr		: std_logic_vector(21 downto 0);
-signal sdram_di      : std_logic_vector(63 downto 0);
-signal sdram_do      : std_logic_vector(63 downto 0);
+signal sdram_addr    : std_logic_vector(21 downto 0);
+signal sdram_di      : std_logic_vector(71 downto 0);
+signal sdram_do      : std_logic_vector(71 downto 0);
 signal sdram_rd      : std_logic;
 signal sdram_wr      : std_logic;
+signal sdram_wr_mask : std_logic_vector(8 downto 0) := "000000000";
+signal sdram_rdy     : std_logic := '0';
 
 begin
 
@@ -206,14 +221,16 @@ port map (
     clk_vga             => clk_vga           -- 25.20 MHz
 );
     
--- CPU0...7
-U2: entity work.t80se64
+-- CPU0
+U2: entity work.t80se
 port map (
     RESET_n             => cpu_reset_n,
     CLK_n               => clk_sdram,
-    ENA                 => cpu_ena,
+    CLKEN               => cpu_ena,
+    WAIT_n              => '1',
     INT_n               => cpu_int_n,
     NMI_n               => cpu_nmi_n,
+    BUSRQ_n             => '1',
     M1_n                => cpu_m1_n,
     MREQ_n              => cpu_mreq_n,
     IORQ_n              => cpu_iorq_n,
@@ -222,20 +239,28 @@ port map (
     A                   => cpu_addr,
     DI                  => cpu_di,
     DO                  => cpu_do,
-    REGS                => regs(211 downto 0),
-    REGS_WR             => regs_wr
+    DIR                 => regs(211 downto 0),
+    DIRSet              => regs_wr,
+    MC_O                => cpu_mc,
+    TS_O                => cpu_ts,
+    IR_O                => cpu_ir,
+    PC_O                => cpu_pc,
+    REG                 => cpu_regs
 );
 
 -- Video
 U3: entity work.vga_spec256
 port map (
     I_CLK               => clk_vga,
+    I_MODE              => kb_video_mode,
     I_DATA              => vga_data,
+    I_GFX_DATA          => vga_gfx_data,
     I_BORDER            => port_xxfe_reg(2 downto 0),    -- Биты D0..D2 порта xxFE определяют цвет бордюра
     I_HCNT              => sync_hcnt,
     I_VCNT              => sync_vcnt,
     I_BLANK             => sync_blank,
     O_ADDR              => vga_addr,
+    O_GFX_ADDR          => vga_gfx_addr,
     O_R                 => vga_r,
     O_G                 => vga_g,
     O_B                 => vga_b);
@@ -252,58 +277,40 @@ port map (
     O_BLANK             => sync_blank,
     O_HSYNC             => sync_hsync,
     O_VSYNC             => sync_vsync);
-    
--- Sdram @ 64bit bus
---U5: entity work.sdram
---port map (
---    I_CLK               => clk_sdram,
---    I_RESET             => areset,
---    I_WR                => sdram_wr,
---    I_RD                => sdram_rd,
---    I_DQM               => "00000000", -- all CPU are active
---    I_ADDR              => sdram_addr,
---    I_DATA              => sdram_di,
---    O_DATA              => sdram_do,
---    O_ENA               => cpu_ena,
---    -- SDRAM Pin
---    O_RAS_N             => DRAM_NRAS,
---    O_CAS_N             => DRAM_NCAS,
---    O_WE_N              => DRAM_NWE,
---    O_DQM               => DRAM_DQM,
---    O_BA                => DRAM_BA,
---    O_MA                => DRAM_A,
---    IO_DQ               => DRAM_DQ);
-	 
+
+-- ram     
 DRAM_NRAS <= '1';
 DRAM_NCAS <= '1';
-DRAM_NWE	<= '1';
+DRAM_NWE    <= '1';
 DRAM_DQM <= "11";
 DRAM_BA <= "11";
 DRAM_A <= (others => '0');
 DRAM_DQ <= (others => 'Z');
-	 
+     
 U5: entity work.sram
 port map (
-	clk						=> clk_sdram,
-	reset						=> areset,
-	wr							=> sdram_wr,
-	rd							=> sdram_rd,
-	a							=> sdram_addr(15 downto 0),
-	di							=> sdram_di,
-	do							=> sdram_do,
-	cpu_ena              => cpu_ena,
-	
-	sram_a					=> MA,
-	sram_d					=> MD,
-	sram_rd_n				=> MRD_N,
-	sram_wr_n				=> MWR_N
+    clk                 => clk_sdram,
+    reset               => areset,
+    wr                  => sdram_wr,
+	 wr_mask					=> sdram_wr_mask,
+    rd                  => sdram_rd,
+    a                   => sdram_addr(15 downto 0),
+    di                  => sdram_di,
+    do                  => sdram_do,
+    cpu_ena             => cpu_ena,
+	 do_rdy					=> sdram_rdy,
+    
+    sram_a              => MA,
+    sram_d              => MD,
+    sram_rd_n           => MRD_N,
+    sram_wr_n           => MWR_N
 );
 
--- VRAM 8K x 64
+-- VRAM 8K x 8bit
 U6: entity work.dpram2
 generic map (
     addr_width_g        => 13,
-    data_width_g        => 64
+    data_width_g        => 8
 )
 port map (
     addr_a_i            => vram_addr,
@@ -312,11 +319,57 @@ port map (
     clk_b_i             => clk_vga,
     data_a_i            => vram_di,
     we_i                => vram_wr,
-    data_b_o            => vga_data(63 downto 0)
+    data_b_o            => vga_data
+);
+
+-- VRAM 8K x 64bit
+U7: entity work.dpram2
+generic map (
+    addr_width_g        => 13,
+    data_width_g        => 64
+)
+port map (
+    addr_a_i            => vram_gfx_addr,
+    addr_b_i            => vga_gfx_addr,
+    clk_a_i             => clk_sdram,
+    clk_b_i             => clk_vga,
+    data_a_i            => vram_gfx_di,
+    we_i                => vram_gfx_wr,
+    data_b_o            => vga_gfx_data
+);
+
+-- gfx cpu (SIMD extender)
+U8: entity work.gfx_cpu
+port map (
+    clk                 => clk_sdram,
+    ena                 => cpu_ena,
+    reset               => not cpu_reset_n,
+
+    -- cpu
+    addr                => cpu_addr,
+    rd_n                => cpu_rd_n,
+    wr_n                => cpu_wr_n,
+    m1_n                => cpu_m1_n,
+    mreq_n              => cpu_mreq_n,
+    di                  => cpu_di,
+    regs                => cpu_regs,
+    ir                  => cpu_ir,
+    mc                  => cpu_mc,
+    ts                  => cpu_ts,
+
+    -- gfx data
+    gfx_di              => cpu_gfx_di,
+    gfx_do              => cpu_gfx_do,
+
+	 -- sram do rdy
+	 ram_rdy				   => sdram_rdy,
+
+    -- gfx busy
+    busy                => gfx_busy
 );
 
 -- MCU
-U7: entity work.mcu
+U9: entity work.mcu
 port map(
     CLK                 => clk_sdram,
     N_RESET             => not areset,
@@ -356,7 +409,7 @@ port map(
 );
 
 -- USB HID parser / transformer to 8x5 matrix + joy mapper on keyboard
-U8: entity work.hid_parser
+U10: entity work.hid_parser
 port map (
     CLK                 => clk_bus,
     RESET               => areset,    
@@ -385,19 +438,20 @@ port map (
 );
 
 -- Soft switches parser from MCU
-U9: entity work.soft_switches
+U11: entity work.soft_switches
 port map (
     CLK                 => clk_sdram,    
     SOFTSW_COMMAND      => softsw_command,    
     JOY_TYPE_L          => kb_joy_type_l,
     JOY_TYPE_R          => kb_joy_type_r,
+    MODE                => kb_video_mode,
     PAUSE               => kb_pause,
     NMI                 => kb_nmi,
-    RESET               => kb_reset    
+    RESET               => kb_reset
 );
 
 -- osd overlay
-U10: entity work.overlay
+U12: entity work.overlay
 port map (
     CLK                 => clk_vga,
     RGB_I               => vga_r & vga_g & vga_b,
@@ -418,78 +472,124 @@ begin
     end if;
 end process;
 
-reset          <= areset or kb_reset;   					 -- горячий сброс
+reset          <= areset or kb_reset;                        -- горячий сброс
 cpu_reset_n    <= not(reset) and not(mcu_busy) and not(romloader_act) and not(fileloader_act); -- CPU сброс
 inta_n         <= cpu_iorq_n or cpu_m1_n;              -- inta_n
 cpu_nmi_n      <= not kb_nmi;                          -- NMI
 
-vram_wr        <= fileloader_wr64 when fileloader_act = '1' and fileloader_a64(15 downto 13) = "010" else
-						'1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr(15 downto 13) = "010") else 
-						'0';
-vram_di			<= fileloader_do64 when fileloader_act = '1' else
-						cpu_do(63 downto 0);
-vram_addr		<= fileloader_a64(12 downto 0) when fileloader_act = '1' else
-						cpu_addr(12 downto 0);
-sdram_wr    	<= romloader_wr64 when romloader_act = '1' else
-						fileloader_wr64 when fileloader_act = '1' else
-						'1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr(15 downto 14) /= "00") else 
-						'0';
-sdram_rd    	<= '0' when romloader_act='1' or fileloader_act='1' else
-						'1' when cpu_mreq_n = '0' and cpu_rd_n = '0' else 
-						'0';
-sdram_di			<= romloader_do64 when romloader_act = '1' else
-						fileloader_do64 when fileloader_act = '1' else
-						cpu_do;
-sdram_addr		<= "000000" & romloader_a64 when romloader_act = '1' else
-						"000000" & fileloader_a64 when fileloader_act = '1' else
-						"000000" & cpu_addr;
+vram_wr         <= fileloader_wr8 when fileloader_act = '1' and fileloader_sna = '1' and fileloader_a8(15 downto 13) = "010" else
+                        '1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr(15 downto 13) = "010") else 
+                        '0';
+
+vram_gfx_wr     <= fileloader_wr64 when fileloader_act = '1' and fileloader_gfx = '1' and fileloader_a64(15 downto 13) = "010" else
+                        '1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr(15 downto 13) = "010") else 
+                        '0';
+
+vram_di         <= fileloader_do8 when fileloader_act = '1' else
+                        cpu_do(7 downto 0);
+
+vram_gfx_di     <= fileloader_do64 when fileloader_act = '1' else
+                        cpu_gfx_do(63 downto 0);
+
+vram_addr       <= fileloader_a8(12 downto 0) when fileloader_act = '1' and fileloader_sna = '1' else
+                        cpu_addr(12 downto 0);
+
+vram_gfx_addr   <= fileloader_a64(12 downto 0) when fileloader_act = '1' and fileloader_gfx = '1' else
+                        cpu_addr(12 downto 0);
+
+sdram_wr        <= romloader_wr when romloader_act = '1' else
+                   fileloader_wr8 when fileloader_act = '1' and fileloader_sna = '1' else
+                   fileloader_wr64 when fileloader_act = '1' and fileloader_gfx = '1' else
+                   '1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr(15 downto 14) /= "00") else 
+                   '0';
+
+sdram_wr_mask   <= "000000001" when romloader_act = '1' else
+                   "000000001" when fileloader_act = '1' and fileloader_sna = '1' else
+                   "111111110" when fileloader_act = '1' and fileloader_gfx = '1' else
+                   "111111111";
+
+sdram_rd        <= '0' when romloader_act='1' or fileloader_act='1' else
+                   '1' when cpu_mreq_n = '0' and cpu_rd_n = '0' else 
+                   '0';
+
+sdram_di(7 downto 0) <= romloader_do when romloader_act = '1' else
+                        fileloader_do8 when fileloader_act = '1' and fileloader_sna = '1' else
+                        cpu_do;
+
+sdram_di(71 downto 8) <= x"0000000000000000" when romloader_act = '1' else
+                         fileloader_do64 when fileloader_act = '1' and fileloader_gfx = '1' else
+                         cpu_gfx_do;
+
+sdram_addr        <= "000000" & romloader_a(15 downto 0) when romloader_act = '1' else
+                     "000000" & fileloader_a8 when fileloader_act = '1' and fileloader_sna = '1' else
+                     "000000" & fileloader_a64 when fileloader_act = '1' and fileloader_gfx = '1' else
+                     "000000" & cpu_addr;
 
 AUDIO_L        <= "0000" & port_xxfe_reg(4) & "00000000000";
 AUDIO_R        <= "0000" & port_xxfe_reg(4) & "00000000000";
-BEEPER 			<= port_xxfe_reg(4);
-CLK_BUS 			<= clk_sdram;
-CLK_SDR_OUT 	<= clk_sdram_out;
-VGA_HS 			<= sync_hsync;
-VGA_VS 			<= sync_vsync;
-VGA_BLANK 		<= sync_blank;
 
--------------------------------------------------------------------------------
--- ROM loader (expand data to 64 bit)
-romloader_wr64 <= romloader_wr;
-romloader_a64 <= romloader_a(15 downto 0);
-romloader_do64 <= romloader_do & romloader_do & romloader_do & romloader_do & romloader_do & romloader_do & romloader_do & romloader_do;
+BEEPER         <= port_xxfe_reg(4);
+
+CLK_BUS        <= clk_sdram;
+CLK_SDR_OUT    <= clk_sdram_out;
+
+VGA_HS         <= sync_hsync;
+VGA_VS         <= sync_vsync;
+VGA_BLANK      <= sync_blank;
 
 -------------------------------------------------------------------------------
 -- File loader (load game data into 8 cpus, load regs from snapshot)
 process (clk_sdram)
 begin
     if rising_edge(clk_sdram) then
-		 fileloader_wr64 <= '0';
-		 
-		 prev_fileloader_act <= fileloader_act;
-		 if (fileloader_act = '1' and prev_fileloader_act = '0') then -- start of file loader
-			regs_wr <= '0';
-		 end if;
-		 if (fileloader_act = '0' and prev_fileloader_act = '1') then -- end of file loader
-			regs_wr <= '0';
-		 end if;
-		 
+         fileloader_wr64 <= '0';
+         fileloader_wr8 <= '0';
+         
+         prev_fileloader_act <= fileloader_act;
+         if (fileloader_act = '1' and prev_fileloader_act = '0') then -- start of file loader
+            regs_wr <= '0';
+            fileloader_sna <= '1';
+            fileloader_gfx <= '0';
+				fileloader_a8 <= x"3FFF";
+				fileloader_a64 <= x"3FFF"; -- base address to load snap
+         end if;
+         if (fileloader_act = '0' and prev_fileloader_act = '1') then -- end of file loader
+            regs_wr <= '0';
+            fileloader_sna <= '0';
+            fileloader_gfx <= '0';
+         end if;
+         
         if fileloader_wr = '1' then
-            -- snapshot for 8x CPUs
-            if fileloader_a < 393216 then -- 49152*8
-                fileloader_a64 <= fileloader_a(18 downto 3) + 16384; -- 0x4000 offset
+
+            -- snapshot for cpu
+            if fileloader_a < 49152 then -- 49152 
+               fileloader_sna <= '1';
+               fileloader_gfx <= '0';
+               fileloader_a8 <= fileloader_a8 + 1; -- 0x4000 offset
+               fileloader_do8 <= fileloader_do;
+               fileloader_wr8 <= '1';
+
+            -- snapshot for gpu
+            elsif fileloader_a < 442368 then -- 49152 + 49152*8
+                fileloader_sna <= '0';
+                fileloader_gfx <= '1';
+                
 					 if (fileloader_a(2 downto 0) = "000") then -- init buf
-						fileloader_buf <= fileloader_do & x"00000000000000";
+							fileloader_buf <= fileloader_do & x"00000000000000";
                 elsif (fileloader_a(2 downto 0) = "111") then -- write buf
                     fileloader_do64 <= fileloader_do & fileloader_buf(63 downto 8);
+						  fileloader_a64 <= fileloader_a64 + 1;
                     fileloader_wr64 <= '1';
 					 else -- shift buf
 						  fileloader_buf <= fileloader_do & fileloader_buf(63 downto 8);
                 end if;
+
             -- registers dump
             else
+                fileloader_sna <= '0';
+                fileloader_gfx <= '0';
                 regs(223 downto 0) <= fileloader_do & regs(223 downto 8);
-                if (fileloader_a = 393244-1) then -- write regs at the end
+                if (fileloader_a = 442396-1) then -- write regs at the end
                     regs_wr <= '1';
                 end if;
             end if;
@@ -516,17 +616,21 @@ end process;
 process (selector, sdram_do, kb_do, joy_do)
 begin
     case selector is
-        when "000" => cpu_di <= sdram_do;
-        when "001" => cpu_di <= "111" & kb_do & "111" & kb_do & "111" & kb_do & "111" & kb_do & "111" & kb_do & "111" & kb_do & "111" & kb_do & "111" & kb_do;
-        when "010" => cpu_di <= joy_do & joy_do & joy_do & joy_do & joy_do & joy_do & joy_do & joy_do;
-        when others => cpu_di <= (others => '1');
+        when "000" => cpu_di <= sdram_do(7 downto 0); 
+							 cpu_gfx_di <= sdram_do(7 downto 0) & sdram_do(7 downto 0) & sdram_do(7 downto 0) & sdram_do(7 downto 0) & 
+											   sdram_do(7 downto 0) & sdram_do(7 downto 0) & sdram_do(7 downto 0) & sdram_do(7 downto 0);
+        when "001" => cpu_di <= sdram_do(7 downto 0); cpu_gfx_di <= sdram_do(71 downto 8);
+        when "010" => cpu_di <= "111" & kb_do; cpu_gfx_di <= (others => '1');
+        when "011" => cpu_di <= joy_do; cpu_gfx_di <= (others => '1');
+        when others => cpu_di <= (others => '1'); cpu_gfx_di <= (others => '1');
     end case;
 end process;
 
 selector <=
-	"000" when cpu_mreq_n = '0' and cpu_rd_n = '0' else    										   -- SDRAM
-	"001" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_addr(7 downto 0) = X"FE" else   -- Клавиатура, порт xxFE
-	"010" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_addr(7 downto 0) = X"1F" else   -- Joystick, порт xx1F
-	(others => '1');
+    "000" when cpu_mreq_n = '0' and cpu_rd_n = '0' and cpu_addr(15 downto 14) = "00" else   -- SDRAM ROM
+    "001" when cpu_mreq_n = '0' and cpu_rd_n = '0' and cpu_addr(15 downto 14) /= "00"else   -- SDRAM RAM
+    "010" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_addr(7 downto 0) = X"FE" else    -- Клавиатура, порт xxFE
+    "011" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_addr(7 downto 0) = X"1F" else    -- Joystick, порт xx1F
+    (others => '1');
     
 end rtl;

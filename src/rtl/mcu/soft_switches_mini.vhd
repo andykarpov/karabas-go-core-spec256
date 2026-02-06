@@ -15,6 +15,7 @@ entity soft_switches is
 	
 	JOY_TYPE_L : out std_logic_vector(2 downto 0);
 	JOY_TYPE_R : out std_logic_vector(2 downto 0);
+    MODE : out std_logic;
 	PAUSE : out std_logic;
 	NMI : out std_logic;
 	RESET : out std_logic
@@ -36,9 +37,10 @@ begin
 				-- 03 - text line
 				when x"04" => JOY_TYPE_L <= SOFTSW_COMMAND(2 downto 0);
 				when x"05" => JOY_TYPE_R <= SOFTSW_COMMAND(2 downto 0);
-				when x"06" => PAUSE <= SOFTSW_COMMAND(0);
-				when x"07" => NMI <= SOFTSW_COMMAND(0);
-				when x"08" => RESET <= SOFTSW_COMMAND(0);	
+                when x"06" => MODE <= SOFTSW_COMMAND(0);
+				when x"07" => PAUSE <= SOFTSW_COMMAND(0);
+				when x"08" => NMI <= SOFTSW_COMMAND(0);
+				when x"09" => RESET <= SOFTSW_COMMAND(0);	
 				when others => null;
 			end case;
 		end if;

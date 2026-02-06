@@ -1,0 +1,1 @@
+../../../karabas-go-tools/spec256/spec256.py

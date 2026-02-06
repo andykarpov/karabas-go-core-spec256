@@ -11,12 +11,12 @@ use IEEE.std_logic_unsigned.all;
 entity hid_parser is
 	generic 
 	(
-		NUM_KEYS : integer range 1 to 6 := 2 -- number of simultaneously pressed keys to process
+		NUM_KEYS : integer range 1 to 6 := 6 -- number of simultaneously pressed keys to process
 	);
 	port
 	(
-	 CLK			 : in std_logic;
-	 RESET 		 : in std_logic;
+	 CLK		: in std_logic;
+	 RESET 		: in std_logic;
 	 
 	 -- incoming usb hid report data
 	 KB_STATUS : in std_logic_vector(7 downto 0);

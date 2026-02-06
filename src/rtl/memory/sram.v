@@ -3,9 +3,10 @@ module sram(
     input wire             reset,
 
     input wire  [15:0]     a,
-    input wire  [63:0]     di,
-    output reg  [63:0]     do,
+    input wire  [71:0]     di,
+    output reg  [71:0]     do,
     input wire             wr,
+	 input wire  [8:0]      wr_mask = 9'b111111111,
     input wire             rd,
 	 output wire            cpu_ena,
 
@@ -24,21 +25,25 @@ localparam S_WRITE1         = 1;
 localparam S_WRITE2         = 2;
 localparam S_WRITE3         = 3;
 localparam S_WRITE4         = 4;
-localparam S_READ1          = 5;
-localparam S_READ2          = 6;
-localparam S_READ3          = 7;
-localparam S_READ4          = 8;
-localparam S_READ1_DONE     = 9;
-localparam S_READ2_DONE     = 10;
-localparam S_READ3_DONE     = 11;
-localparam S_READ4_DONE     = 12;
-localparam S_WRITE1_DONE     = 13;
-localparam S_WRITE2_DONE     = 14;
-localparam S_WRITE3_DONE     = 15;
-localparam S_WRITE4_DONE     = 16;
+localparam S_WRITE5         = 5;
+localparam S_READ1          = 6;
+localparam S_READ2          = 7;
+localparam S_READ3          = 8;
+localparam S_READ4          = 9;
+localparam S_READ5          = 10;
+localparam S_READ1_DONE     = 11;
+localparam S_READ2_DONE     = 12;
+localparam S_READ3_DONE     = 13;
+localparam S_READ4_DONE     = 14;
+localparam S_READ5_DONE     = 15;
+localparam S_WRITE1_DONE     = 16;
+localparam S_WRITE2_DONE     = 17;
+localparam S_WRITE3_DONE     = 18;
+localparam S_WRITE4_DONE     = 19;
+localparam S_WRITE5_DONE     = 20;
 
 reg [4:0] state = S_IDLE;
-reg [63:0] diD;
+reg [71:0] diD;
 reg [15:0] outD;
 reg [15:0] aD;
 assign sram_d = (sram_wr_n != 2'b11) ? outD : 16'bz;
@@ -82,8 +87,19 @@ begin
                 if (wr && ~prev_wr) begin
                     busy <= 1;
                     diD <= di;
-                    aD <= a; 
-                    state <= S_WRITE1;
+                    aD <= a;
+						  if (wr_mask[0])
+							   state <= S_WRITE1;
+						  else if (wr_mask[2:1] != 2'b00)
+								state <= S_WRITE2;
+						  else if (wr_mask[4:3] != 2'b00)
+								state <= S_WRITE3;
+						  else if (wr_mask[6:5] != 2'b00)
+								state <= S_WRITE4;
+						  else if (wr_mask[8:7] != 2'b00)
+								state <= S_WRITE5;
+						  else 
+							 busy <= 0;
                 end
                 else if (rd && ~prev_rd) begin
                     busy <= 1;
@@ -94,98 +110,146 @@ begin
             end
             
             S_READ1: begin
-                sram_a <= {aD[15:0], 2'b00};
+                sram_a <= {aD[15:0], 3'b000};
                 sram_rd_n <= 2'b00;
                 state <= S_READ1_DONE;
             end
 				
 				S_READ1_DONE: begin
-					do[15:0] <= sram_d;
+					do[7:0] <= sram_d[7:0];
 					sram_rd_n <= 2'b11;
 					state <= S_READ2;
 				end
             
             S_READ2: begin
-                sram_a <= sram_a+1;
+                sram_a <= {aD[15:0], 3'b001};
                 sram_rd_n <= 2'b00;
                 state <= S_READ2_DONE;
             end
 
 				S_READ2_DONE: begin
-					do[31:16] <= sram_d;
+					do[23:8] <= sram_d;
 					sram_rd_n <= 2'b11;
 					state <= S_READ3;
 				end
  
             S_READ3: begin
-                sram_a <= sram_a+1;
+                sram_a <= {aD[15:0], 3'b010};
 					 sram_rd_n <= 2'b00;
                 state <= S_READ3_DONE;
             end
 				
 				S_READ3_DONE: begin
-					do[47:32] <= sram_d;
+					do[39:24] <= sram_d;
 					sram_rd_n <= 2'b11;
 					state <= S_READ4;
 				end
 
             S_READ4: begin
-                sram_a <= sram_a+1;
+                sram_a <= {aD[15:0], 3'b011};
 					 sram_rd_n <= 2'b00;
                 state <= S_READ4_DONE;
             end
 
             S_READ4_DONE: begin
-                do[63:48] <= sram_d;
+                do[55:40] <= sram_d;
+                sram_rd_n <= 2'b11;
+                state <= S_READ5;
+            end
+
+            S_READ5: begin
+                sram_a <= {aD[15:0], 3'b100};
+					 sram_rd_n <= 2'b00;
+                state <= S_READ5_DONE;
+            end
+
+            S_READ5_DONE: begin
+                do[71:56] <= sram_d;
                 sram_rd_n <= 2'b11;
                 do_rdy <= 1;
                 state <= S_IDLE;
             end
 
             S_WRITE1: begin
-                sram_a <= {aD[15:0], 2'b00};
-                outD <= diD[15:0];
-                sram_wr_n <= 2'b00;
+                sram_a <= {aD[15:0], 3'b000};
+                outD <= diD[7:0];
+                sram_wr_n <= 2'b10;
                 state <= S_WRITE1_DONE;
             end
 				
 				S_WRITE1_DONE: begin
 					sram_wr_n <= 2'b11;
-					state <= S_WRITE2;
+					if (wr_mask[2:1] != 2'b00)
+						state <= S_WRITE2;
+					else if (wr_mask[4:3] != 2'b00)
+						state <= S_WRITE3;
+					else if (wr_mask[6:5] != 2'b00)
+						state <= S_WRITE4;
+					else if (wr_mask[8:7] != 2'b00)
+						state <= S_WRITE5;
+					else
+						state <= S_IDLE;
 				end
 
             S_WRITE2: begin
-                sram_a <= sram_a + 1;
-                outD <= diD[31:16];
-                sram_wr_n <= 2'b00;
+                sram_a <= {aD[15:0], 3'b001};
+                outD <= diD[23:8];
+                sram_wr_n <= ~wr_mask[2:1];
                 state <= S_WRITE2_DONE;
             end
 
 				S_WRITE2_DONE: begin
 					sram_wr_n <= 2'b11;
-					state <= S_WRITE3;
+					if (wr_mask[4:3] != 2'b00)
+						state <= S_WRITE3;
+					else if (wr_mask[6:5] != 2'b00)
+						state <= S_WRITE4;
+					else if (wr_mask[8:7] != 2'b00)
+						state <= S_WRITE5;
+					else
+						state <= S_IDLE;
 				end
 
            S_WRITE3: begin
-                sram_a <= sram_a + 1;
-                outD <= diD[47:32];
-					 sram_wr_n <= 2'b00;
+                sram_a <= {aD[15:0], 3'b010};
+                outD <= diD[39:24];
+                sram_wr_n <= ~wr_mask[4:3];
                 state <= S_WRITE3_DONE;
             end
 
 				S_WRITE3_DONE: begin
 					sram_wr_n <= 2'b11;
-					state <= S_WRITE4;
+					if (wr_mask[6:5] != 2'b00)
+						state <= S_WRITE4;
+					else if (wr_mask[8:7] != 2'b00)
+						state <= S_WRITE5;
+					else
+						state <= S_IDLE;
 				end
 
            S_WRITE4: begin
-                sram_a <= sram_a + 1;
-                outD <= diD[63:48];
-					 sram_wr_n <= 2'b00;
+                sram_a <= {aD[15:0], 3'b011};
+                outD <= diD[55:40];
+                sram_wr_n <= ~wr_mask[6:5];
                 state <= S_WRITE4_DONE;
             end
 
 				S_WRITE4_DONE: begin
+					sram_wr_n <= 2'b11;
+					if (wr_mask[8:7] != 2'b00)
+						state <= S_WRITE5;
+					else
+						state <= S_IDLE;
+				end
+
+           S_WRITE5: begin
+                sram_a <= {aD[15:0], 3'b100};
+                outD <= diD[71:56];
+                sram_wr_n <= ~wr_mask[8:7];
+                state <= S_WRITE5_DONE;
+            end
+
+				S_WRITE5_DONE: begin
 					sram_wr_n <= 2'b11;
 					state <= S_IDLE;
 				end
