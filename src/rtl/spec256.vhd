@@ -49,6 +49,9 @@ use IEEE.std_logic_unsigned.all;
 use IEEE.numeric_std.all; 
 
 entity spec256 is
+generic (
+    BURST_MAX_MHZ : integer := 0 -- burst transfers from the mcu, see mcu.vhd
+);
 port (
     -- Clock
     CLK_50MHZ   : in std_logic;    -- 50MHz
@@ -66,6 +69,8 @@ port (
     MCU_MOSI    : in  std_logic;
     MCU_MISO    : out std_logic;
     MCU_IO      : in  std_logic_vector(3 downto 0);
+    MCU_BURST_CS_N  : in  std_logic := '1'; -- burst transfers (karabas-go-firmware docs/burst_protocol.md)
+    MCU_BURST_READY : out std_logic;
 
     -- VGA
     VGA_RGB     : out std_logic_vector(23 downto 0);
@@ -317,6 +322,9 @@ port map (
 
 -- MCU
 U7: entity work.mcu
+generic map(
+    BURST_MAX_MHZ       => BURST_MAX_MHZ
+)
 port map(
     CLK                 => clk_sdram,
     N_RESET             => not areset,
@@ -325,6 +333,8 @@ port map(
     MCU_MISO            => MCU_MISO,
     MCU_SCK             => MCU_SCK,
     MCU_SS              => MCU_CS_N,
+    MCU_BURST_CS_N      => MCU_BURST_CS_N,
+    MCU_BURST_READY     => MCU_BURST_READY,
     
     KB_STATUS           => hid_kb_status,
     KB_DAT0             => hid_kb_dat0,
