@@ -202,6 +202,24 @@ signal ext_magic     : std_logic := '0';                        -- the header so
 signal ext_hdr       : std_logic_vector(23 downto 0) := (others => '0');  -- flags, UpColorsMixed, DownColorsMixed
 signal fileloader_rom: std_logic := '0';                        -- writing the ROM planes
 signal rom_gfx       : std_logic := '0';                        -- the game has ROM planes (.GFB)
+signal rom_gfx0      : std_logic := '0';                        -- and planes of the ROM 0 (.GFA, flag 4)
+signal rom_gfx_cur   : std_logic;                               -- planes for the ROM paged in
+-- the 128K (flag 5): the block after the backgrounds, 8 bytes (#7FFD, reserved), then the banks 1, 3,
+-- 4, 6, 7, each 16384 bytes of RAM and 131072 of planes
+signal x128          : std_logic := '0';
+signal x_hdr         : std_logic_vector(3 downto 0) := (others => '0');  -- bytes of the header, bit 3: done
+signal x_idx         : integer range 0 to 7 := 0;               -- the bank in the block, 5: all written
+signal x_pl          : std_logic := '0';                        -- the planes of the bank
+signal x_off         : std_logic_vector(16 downto 0) := (others => '0');
+signal p7ffd_load    : std_logic_vector(5 downto 0) := "110000";
+-- the banks of the SRAM (pager.vhd): of the address, or of the loader for the ROM planes and the 128K block
+signal pg_set        : std_logic;
+signal pg_set_val    : std_logic_vector(5 downto 0);
+signal pg_bank       : std_logic_vector(3 downto 0);
+signal p7ffd         : std_logic_vector(5 downto 0);
+signal ld_bank       : std_logic_vector(3 downto 0) := (others => '0');
+signal ld_ov         : std_logic := '0';
+signal sdram_bank    : std_logic_vector(3 downto 0);
 signal pal_wr        : std_logic := '0';
 signal pal_a         : std_logic_vector(7 downto 0) := (others => '0');
 signal pal_d         : std_logic_vector(23 downto 0);
@@ -471,6 +489,31 @@ begin
     end if;
 end process;
      
+-- #7FFD and the banks: #30 on a reset (ROM 1, banks 5, 2, 0, locked: a 48K game as on the 48K); while a
+-- file loads, p7ffd_load: #30 for the RAM of 4000-FFFF (banks 5, 2, 0), then the value of a 128K snapshot,
+-- kept when the CPU starts (the ROM planes and the banks of the 128K block are written with ld_bank)
+U16: entity work.pager
+port map (
+    CLK                 => clk_sdram,
+    SET                 => pg_set,
+    SET_VAL             => pg_set_val,
+    IORQ_N              => cpu_iorq_n,
+    WR_N                => cpu_wr_n,
+    M1_N                => cpu_m1_n,
+    A                   => cpu_addr,
+    D                   => cpu_do,
+    BANK_A              => sdram_addr(15 downto 14),
+    BANK                => pg_bank,
+    P7FFD               => p7ffd
+);
+pg_set     <= reset or romloader_act or fileloader_act;
+pg_set_val <= p7ffd_load when fileloader_act = '1' else "110000";
+
+-- the ROM loader: the ROM 0 at 0, the ROM 1 at #4000 (core json)
+sdram_bank <= "100" & romloader_a(14) when romloader_act = '1' else
+              ld_bank when fileloader_act = '1' and ld_ov = '1' else
+              pg_bank;
+
 U5: entity work.sram
 port map (
     clk                 => clk_sdram,
@@ -482,6 +525,7 @@ port map (
     lane_en             => lane_en,
     lane_pages          => tbl_pages,
     a                   => sdram_addr(15 downto 0),
+    bank                => sdram_bank,
     di                  => sdram_di,
     do                  => sdram_do,
     cpu_ena             => cpu_ena,
@@ -727,11 +771,11 @@ inta_n         <= cpu_iorq_n or cpu_m1_n;              -- inta_n
 cpu_nmi_n      <= not kb_nmi;                          -- NMI
 
 vram_wr         <= fileloader_wr8 when fileloader_act = '1' and fileloader_sna = '1' and fileloader_a8(15 downto 13) = "010" else
-                        '1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr(15 downto 13) = "010") else 
+                        '1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and pg_bank = "0101" and cpu_addr(13) = '0') else 
                         '0';
 
 vram_gfx_wr     <= fileloader_wr64 when fileloader_act = '1' and fileloader_gfx = '1' and fileloader_a64(15 downto 13) = "010" else
-                        '1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr(15 downto 13) = "010") else 
+                        '1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and pg_bank = "0101" and cpu_addr(13) = '0') else 
                         '0';
 
 vram_di         <= fileloader_do8 when fileloader_act = '1' else
@@ -902,6 +946,14 @@ begin
 				fileloader_a64 <= x"3FFF"; -- base address to load snap
             ext_magic <= '0';
             rom_gfx <= '0';
+            rom_gfx0 <= '0';
+            x128 <= '0';
+            x_hdr <= (others => '0');
+            x_idx <= 0;
+            x_pl <= '0';
+            x_off <= (others => '0');
+            p7ffd_load <= "110000";
+            ld_ov <= '0';
             pal_byte <= 0;
             pal_next <= (others => '0');
             s_paper00inkff <= '1';
@@ -968,7 +1020,7 @@ begin
                     when 1 => if fileloader_do /= x"32" then ext_magic <= '0'; end if;  -- 2
                     when 2 => if fileloader_do /= x"35" then ext_magic <= '0'; end if;  -- 5
                     when 3 => if fileloader_do /= x"36" then ext_magic <= '0'; end if;  -- 6
-                    when 4 => if fileloader_do /= x"01" then ext_magic <= '0'; end if;  -- version
+                    when 4 => if fileloader_do /= x"01" and fileloader_do /= x"02" then ext_magic <= '0'; end if;  -- version
                     when 5 => ext_hdr(7 downto 0) <= fileloader_do;
                     when 6 => ext_hdr(15 downto 8) <= fileloader_do;
                     when 7 => ext_hdr(23 downto 16) <= fileloader_do;
@@ -982,6 +1034,8 @@ begin
                         tbl_pages(23 downto 16) <= fileloader_do;
                         if ext_magic = '1' then
                             rom_gfx <= ext_hdr(0);
+                            rom_gfx0 <= ext_hdr(0) and ext_hdr(4);
+                            x128 <= ext_hdr(5);
                             s_paper00inkff <= ext_hdr(1);
                             s_hide_same <= ext_hdr(2);
                             s_up_mixed <= ext_hdr(15 downto 8);
@@ -989,7 +1043,9 @@ begin
                             s_bk_over_ff <= ext_hdr(3);
                             bg_on <= '0';
                             if bg_count /= x"00" then bg_on <= sdram_ready; end if;
-                            if ext_hdr(0) = '1' then
+                            if ext_hdr(0) = '1' and ext_hdr(4) = '1' then
+                                bg_base <= std_logic_vector(to_unsigned(848 + 2 * 131072, 32));
+                            elsif ext_hdr(0) = '1' then
                                 bg_base <= std_logic_vector(to_unsigned(848 + 131072, 32));
                             else
                                 bg_base <= std_logic_vector(to_unsigned(848, 32));
@@ -1037,10 +1093,13 @@ begin
                     bg_wr_off <= bg_wr_off + 1;
                 end if;
 
-            -- the ROM planes (.GFB): 8 bytes per address 0000-3FFF, as the planes of the RAM
-            elsif t >= 848 and u < 131072 and rom_gfx = '1' then
+            -- the ROM planes: 8 bytes per address 0000-3FFF, as the planes of the RAM; the ROM 1 (.GFB, bank 9),
+            -- then the ROM 0 (.GFA, bank 8) with flag 4
+            elsif t >= 848 and (u < 131072 or (u < 262144 and rom_gfx0 = '1')) and rom_gfx = '1' then
                 fileloader_gfx <= '0';
                 fileloader_rom <= '1';
+                ld_ov <= '1';
+                ld_bank <= "100" & not u(17);
                 if (u(2 downto 0) = "000") then
                     fileloader_buf <= fileloader_do & x"00000000000000";
                 elsif (u(2 downto 0) = "111") then
@@ -1049,6 +1108,54 @@ begin
                     fileloader_wr64 <= '1';
                 else
                     fileloader_buf <= fileloader_do & fileloader_buf(63 downto 8);
+                end if;
+
+            -- the 128K block, after the backgrounds: the header, then the RAM and the planes of each bank,
+            -- written at C000-FFFF of the bank (not the screen of the VRAM)
+            elsif t >= bg_base and ext_magic = '1' and x128 = '1' and x_idx < 5 then
+                fileloader_rom <= '0';
+                ld_ov <= '1';
+                case x_idx is
+                    when 0 => ld_bank <= "0001";
+                    when 1 => ld_bank <= "0011";
+                    when 2 => ld_bank <= "0100";
+                    when 3 => ld_bank <= "0110";
+                    when others => ld_bank <= "0111";
+                end case;
+                if x_hdr(3) = '0' then
+                    if x_hdr(2 downto 0) = "000" then p7ffd_load <= fileloader_do(5 downto 0); end if;
+                    x_hdr <= x_hdr + 1;
+                elsif x_pl = '0' then
+                    fileloader_sna <= '1';
+                    fileloader_gfx <= '0';
+                    fileloader_a8 <= "11" & x_off(13 downto 0);
+                    fileloader_do8 <= fileloader_do;
+                    fileloader_wr8 <= '1';
+                    if x_off(13 downto 0) = "11111111111111" then
+                        x_pl <= '1';
+                        x_off <= (others => '0');
+                    else
+                        x_off <= x_off + 1;
+                    end if;
+                else
+                    fileloader_sna <= '0';
+                    fileloader_gfx <= '1';
+                    if (x_off(2 downto 0) = "000") then
+                        fileloader_buf <= fileloader_do & x"00000000000000";
+                    elsif (x_off(2 downto 0) = "111") then
+                        fileloader_do64 <= fileloader_do & fileloader_buf(63 downto 8);
+                        fileloader_a64 <= "11" & x_off(16 downto 3);
+                        fileloader_wr64 <= '1';
+                    else
+                        fileloader_buf <= fileloader_do & fileloader_buf(63 downto 8);
+                    end if;
+                    if x_off = "11111111111111111" then
+                        x_pl <= '0';
+                        x_off <= (others => '0');
+                        x_idx <= x_idx + 1;
+                    else
+                        x_off <= x_off + 1;
+                    end if;
                 end if;
 
             else
@@ -1076,7 +1183,9 @@ end process;
 -- Шина данных CPU
 -- Линии (cpu_gfx_di, байт линии n в битах 8n+7..8n): из ROM - сам ROM, из RAM - своя плоскость,
 -- поток команд (cpu_inst) - байт основной памяти при GFX_INST_FROM_MAIN, из порта - то же, что CPU.
-process (selector, sdram_do, kb_do, joy_do, ay_do, cpu_inst, rom_gfx)
+rom_gfx_cur <= rom_gfx when p7ffd(4) = '1' else rom_gfx0;
+
+process (selector, sdram_do, kb_do, joy_do, ay_do, cpu_inst, rom_gfx_cur)
     variable d : std_logic_vector(7 downto 0);
 begin
     case selector is
@@ -1091,7 +1200,7 @@ begin
     cpu_di <= d;
     -- the ROM planes of the game where they are not all 0 (a .GFB colours a part of the ROM, the font;
     -- the rest of the file is 0: the ROM itself)
-    if (selector = "001" or (selector = "000" and rom_gfx = '1' and sdram_do(71 downto 8) /= x"0000000000000000")) and
+    if (selector = "001" or (selector = "000" and rom_gfx_cur = '1' and sdram_do(71 downto 8) /= x"0000000000000000")) and
        not (GFX_INST_FROM_MAIN and cpu_inst = '1') then
         cpu_gfx_di <= sdram_do(71 downto 8);
     else

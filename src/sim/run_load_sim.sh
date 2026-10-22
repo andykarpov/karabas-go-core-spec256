@@ -13,10 +13,10 @@ OUT=build_load
 mkdir -p $OUT
 
 # the ROM and the file as hex lines; SP and the PC on the stack of the snapshot
-python3 - ../roms/82.rom ../games/$GAME.256 ../games/$GAME.SNA $OUT/load.hex > $OUT/regs.txt <<'EOF'
+python3 - ../roms/128_0.rom ../roms/82.rom ../games/$GAME.256 ../games/$GAME.SNA $OUT/load.hex > $OUT/regs.txt <<'EOF'
 import sys
-rom, f256, sna, out = sys.argv[1:5]
-data = open(rom, "rb").read() + open(f256, "rb").read()
+rom0, rom1, f256, sna, out = sys.argv[1:6]
+data = open(rom0, "rb").read() + open(rom1, "rb").read() + open(f256, "rb").read()
 open(out, "w").write("".join("%02X\n" % b for b in data))
 s = open(sna, "rb").read()
 sp = s[23] | s[24] << 8

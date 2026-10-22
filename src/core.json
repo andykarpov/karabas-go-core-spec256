@@ -8,7 +8,8 @@
     "order": 10,
     "eeprom_bank": 255,
     "roms": [
-        {"filename": "roms/82.rom", "address": 0}
+        {"filename": "roms/128_0.rom", "address": 0},
+        {"filename": "roms/82.rom", "address": 16384}
     ],
     "osd": [
         {"type": "P", "name": "Please choose a snapshot to"},

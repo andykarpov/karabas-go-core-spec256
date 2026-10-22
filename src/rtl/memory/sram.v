@@ -3,6 +3,7 @@ module sram(
     input wire             reset,
 
     input wire  [15:0]     a,
+    input wire  [3:0]      bank,         // the bank of a (pager.vhd): the SRAM word is {bank, a[13:0], 3 bits}
     input wire  [71:0]     di,
     output reg  [71:0]     do,
     input wire             wr,
@@ -61,6 +62,7 @@ reg [4:0] state = S_IDLE;
 reg [71:0] diD;
 reg [15:0] outD;
 reg [15:0] aD;
+reg [3:0] bD;
 assign sram_d = (sram_wr_n != 2'b11) ? outD : 16'bz;
 reg prev_rd, prev_wr;
 reg [127:0] laD;
@@ -112,6 +114,7 @@ begin
                     busy <= 1;
                     diD <= di;
                     aD <= a;
+                    bD <= bank;
 						  if (wr_mask[0])
 							   state <= S_WRITE1;
 						  else if (wr_mask[2:1] != 2'b00)
@@ -129,6 +132,7 @@ begin
                     busy <= 1;
                     do_rdy <= 0;
                     aD <= a;
+                    bD <= bank;
                     laD <= lane_a;
                     laEn <= lane_en;
                     laUni <= lane_a[127:16] == {7{lane_a[15:0]}};
@@ -138,7 +142,7 @@ begin
             end
             
             S_READ1: begin
-                sram_a <= {aD[15:0], 3'b000};
+                sram_a <= {bD, aD[13:0], 3'b000};
                 sram_rd_n <= 2'b00;
                 state <= S_READ1_DONE;
             end
@@ -150,7 +154,7 @@ begin
 				end
             
             S_READ2: begin
-                sram_a <= {aD[15:0], 3'b001};
+                sram_a <= {bD, aD[13:0], 3'b001};
                 sram_rd_n <= 2'b00;
                 state <= S_READ2_DONE;
             end
@@ -162,7 +166,7 @@ begin
 				end
  
             S_READ3: begin
-                sram_a <= {aD[15:0], 3'b010};
+                sram_a <= {bD, aD[13:0], 3'b010};
 					 sram_rd_n <= 2'b00;
                 state <= S_READ3_DONE;
             end
@@ -174,7 +178,7 @@ begin
 				end
 
             S_READ4: begin
-                sram_a <= {aD[15:0], 3'b011};
+                sram_a <= {bD, aD[13:0], 3'b011};
 					 sram_rd_n <= 2'b00;
                 state <= S_READ4_DONE;
             end
@@ -186,7 +190,7 @@ begin
             end
 
             S_READ5: begin
-                sram_a <= {aD[15:0], 3'b100};
+                sram_a <= {bD, aD[13:0], 3'b100};
 					 sram_rd_n <= 2'b00;
                 state <= S_READ5_DONE;
             end
@@ -210,7 +214,7 @@ begin
                     state <= S_IDLE;
                 end
                 else if (laD[16*lp[2:0] +: 16] != aD && laD[16*lp[2:0] + 8 +: 8] == aD[15:8] && natural && !laUni && table_page) begin
-                    sram_a <= {laD[16*lp[2:0] +: 16], 3'b001 + lp[2:1]};
+                    sram_a <= {bD, laD[16*lp[2:0] +: 14], 3'b001 + lp[2:1]};   // the page of a: the bank of a
                     sram_rd_n <= 2'b00;
                     state <= S_LANE_DONE;
                 end
@@ -226,7 +230,7 @@ begin
             end
 
             S_WRITE1: begin
-                sram_a <= {aD[15:0], 3'b000};
+                sram_a <= {bD, aD[13:0], 3'b000};
                 outD <= diD[7:0];
                 sram_wr_n <= 2'b10;
                 state <= S_WRITE1_DONE;
@@ -247,7 +251,7 @@ begin
 				end
 
             S_WRITE2: begin
-                sram_a <= {aD[15:0], 3'b001};
+                sram_a <= {bD, aD[13:0], 3'b001};
                 outD <= diD[23:8];
                 sram_wr_n <= ~wr_mask[2:1];
                 state <= S_WRITE2_DONE;
@@ -266,7 +270,7 @@ begin
 				end
 
            S_WRITE3: begin
-                sram_a <= {aD[15:0], 3'b010};
+                sram_a <= {bD, aD[13:0], 3'b010};
                 outD <= diD[39:24];
                 sram_wr_n <= ~wr_mask[4:3];
                 state <= S_WRITE3_DONE;
@@ -283,7 +287,7 @@ begin
 				end
 
            S_WRITE4: begin
-                sram_a <= {aD[15:0], 3'b011};
+                sram_a <= {bD, aD[13:0], 3'b011};
                 outD <= diD[55:40];
                 sram_wr_n <= ~wr_mask[6:5];
                 state <= S_WRITE4_DONE;
@@ -298,7 +302,7 @@ begin
 				end
 
            S_WRITE5: begin
-                sram_a <= {aD[15:0], 3'b100};
+                sram_a <= {bD, aD[13:0], 3'b100};
                 outD <= diD[71:56];
                 sram_wr_n <= ~wr_mask[8:7];
                 state <= S_WRITE5_DONE;

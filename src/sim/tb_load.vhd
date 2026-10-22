@@ -1,5 +1,5 @@
 -------------------------------------------------------------------------------
--- tb_load: the 48K ROM and a .256 file through kg_mcu into the SRAM, in bursts.
+-- tb_load: the ROMs (128_0.rom, 82.rom) and a .256 file through kg_mcu into the SRAM, in bursts.
 --
 -- spec256 (kg_pll, kg_mcu, the loaders, sram.v, T80se_S256) with a model of the
 -- 16-bit SRAM. The testbench plays the RP2040 (karabas-go-firmware
@@ -12,8 +12,8 @@
 -- Checked:
 -- - with the file loaded (the CPU still in reset): every byte of the ROM, of
 --   the SNA RAM and of the 8 planes in the SRAM, in the layout of sram.v
---   (word {a, 000}: bits 7..0 the main byte; words 001..100: planes 0-1 ...
---   6-7);
+--   (word {bank, a[13:0], 000}: bits 7..0 the main byte; words 001..100: planes
+--   0-1 ... 6-7; the ROMs in the banks 8 and 9, the RAM 4000-FFFF in 5, 2, 0);
 -- - after IOCTL_STATE 0: the CPU starts with the registers of the file at the
 --   RETN at 0x0072: its first reads in the RAM are the stack (SP, SP+1) and
 --   then the opcode at the PC of the snapshot.
@@ -27,7 +27,7 @@ use ieee.std_logic_textio.all;
 
 entity tb_load is
 	generic (
-		G_HEX             : string  := "";       -- ROM (16384 bytes) then the .256, a byte per line, hex
+		G_HEX             : string  := "";       -- ROM 0, ROM 1 (32768 bytes) then the .256, a byte per line, hex
 		G_SP              : integer := 0;        -- SP and PC of the snapshot (PC on its stack)
 		G_PC              : integer := 0;
 		BURST_SCK_HALF_PS : integer := 15625     -- 32 MHz
@@ -35,13 +35,13 @@ entity tb_load is
 end tb_load;
 
 architecture sim of tb_load is
-	constant ROM_SIZE  : integer := 16384;
+	constant ROM_SIZE  : integer := 32768;
 	constant FILE_SIZE : integer := 442396;
 	constant SCK_HALF  : time := 31.25 ns;
 	constant BURST_HALF : time := BURST_SCK_HALF_PS * 1 ps;
 
 	type bytes_t is array (0 to ROM_SIZE + FILE_SIZE - 1) of std_logic_vector(7 downto 0);
-	type sram_t is array (0 to 2**19 - 1) of std_logic_vector(15 downto 0);
+	type sram_t is array (0 to 2**21 - 1) of std_logic_vector(15 downto 0);
 
 	signal clk50   : std_logic := '0';
 	signal done    : boolean := false;
@@ -104,7 +104,7 @@ begin
 		md <= (others => 'Z');
 		loop
 			wait on ma, md, mrd_n, mwr_n, checking_start;
-			a := to_integer(unsigned(ma(18 downto 0)));
+			a := to_integer(unsigned(ma));
 			if mwr_n(0) = '0' then mem(a)(7 downto 0) := md(7 downto 0); end if;
 			if mwr_n(1) = '0' then mem(a)(15 downto 8) := md(15 downto 8); end if;
 			if mrd_n /= "11" and mwr_n = "11" then
@@ -122,12 +122,17 @@ begin
 				end loop;
 				file_close(f);
 				for i in 0 to ROM_SIZE - 1 loop
-					check(i, 0, 0, bytes(i), "ROM");
+					check(8 * 16384 + i, 0, 0, bytes(i), "ROM");
 				end loop;
 				for i in 0 to 49151 loop
-					check(16384 + i, 0, 0, bytes(ROM_SIZE + i), "SNA");
+					case i / 16384 is
+						when 0 => sna := 5 * 16384 + i mod 16384;
+						when 1 => sna := 2 * 16384 + i mod 16384;
+						when others => sna := i mod 16384;
+					end case;
+					check(sna, 0, 0, bytes(ROM_SIZE + i), "SNA");
 					for p in 0 to 7 loop
-						check(16384 + i, 1 + p / 2, p mod 2, bytes(ROM_SIZE + 49152 + i * 8 + p), "plane " & integer'image(p));
+						check(sna, 1 + p / 2, p mod 2, bytes(ROM_SIZE + 49152 + i * 8 + p), "plane " & integer'image(p));
 					end loop;
 				end loop;
 				sram_errors <= errors;
@@ -137,7 +142,7 @@ begin
 		-- after the check: the model goes on, without the check
 		loop
 			wait on ma, md, mrd_n, mwr_n;
-			a := to_integer(unsigned(ma(18 downto 0)));
+			a := to_integer(unsigned(ma));
 			if mwr_n(0) = '0' then mem(a)(7 downto 0) := md(7 downto 0); end if;
 			if mwr_n(1) = '0' then mem(a)(15 downto 8) := md(15 downto 8); end if;
 			if mrd_n /= "11" and mwr_n = "11" then
@@ -148,12 +153,19 @@ begin
 		end loop;
 	end process;
 
-	-- the first reads of the RAM by the CPU after the file is loaded (word 000 of each address)
+	-- the first reads of the RAM by the CPU after the file is loaded (word 000 of each address), as the
+	-- addresses of the CPU of the banks 5, 2, 0 (#30 in #7FFD)
 	process (mrd_n)
 		variable a : integer;
 	begin
 		if falling_edge(mrd_n(0)) and checking_start and ma(2 downto 0) = "000" then
-			a := to_integer(unsigned(ma(18 downto 3)));
+			a := to_integer(unsigned(ma(16 downto 3)));
+			case to_integer(unsigned(ma(20 downto 17))) is
+				when 5 => a := a + 16#4000#;
+				when 2 => a := a + 16#8000#;
+				when 0 => a := a + 16#C000#;
+				when others => a := -1;
+			end case;
 			if a >= 16384 and ram_reads < 3 then
 				first_reads(ram_reads) <= a;
 				ram_reads <= ram_reads + 1;

@@ -1,7 +1,8 @@
 // tb_sram: the lane reads of sram.v (lane_a / lane_en, T80_S256 GA): a lane reads its plane byte at
 // its own address only in a page of lane_pages (the tables of reversed bytes), the same 256-byte page, when the word at the address of the main CPU is not
 // coloured (a table) and the 8 lane addresses are not all the same; otherwise it gets the plane of that
-// word.
+// word. The words are {bank, a[13:0], 3 bits} (pager.vhd): the same address in two banks gives the
+// word of the bank, also to the lanes.
 //   cd src/sim && sed 's/\bdo\b/dout/g; s/ = 9.b111111111,/,/' ../rtl/memory/sram.v > work/sram_t.v &&
 //   iverilog -g2005 -o work/tb_sram work/sram_t.v tb_sram.v && vvp work/tb_sram
 // (iverilog takes neither the default value of wr_mask nor, in SystemVerilog mode, the port "do")
@@ -10,6 +11,7 @@
 module tb_sram;
 reg clk = 0, reset = 1, rd = 0, lane_en = 0;
 reg [15:0] a = 0;
+reg [3:0] bank = 4'd2, pb = 4'd2;   // the bank read, the bank of put
 reg [127:0] lane_a = 0;
 reg [23:0] lane_pages = 24'h000080;   // a table of reversed bytes at 80xx
 wire [71:0] dout;
@@ -17,24 +19,24 @@ wire [20:0] sram_a;
 wire [15:0] sram_d;
 wire [1:0] sram_wr_n, sram_rd_n;
 wire busy, do_rdy, cpu_ena;
-reg [15:0] mem [0:(1<<19)-1];
+reg [15:0] mem [0:(1<<21)-1];
 integer errors = 0, i, p;
 
 always #5 clk = ~clk;
-assign sram_d = (sram_rd_n == 2'b00) ? mem[sram_a[18:0]] : 16'bz;
+assign sram_d = (sram_rd_n == 2'b00) ? mem[sram_a] : 16'bz;
 
-sram dut(.clk(clk), .reset(reset), .a(a), .di(72'd0), .dout(dout), .wr(1'b0), .wr_mask(9'h1FF),
+sram dut(.clk(clk), .reset(reset), .a(a), .bank(bank), .di(72'd0), .dout(dout), .wr(1'b0), .wr_mask(9'h1FF),
 	.rd(rd), .lane_a(lane_a), .lane_en(lane_en), .lane_pages(lane_pages), .cpu_ena(cpu_ena), .sram_a(sram_a), .sram_d(sram_d),
 	.sram_wr_n(sram_wr_n), .sram_rd_n(sram_rd_n), .busy(busy), .do_rdy(do_rdy));
 
-// the word of an address: main byte m, plane p = pl[p]
+// the word of an address in the bank pb: main byte m, plane p = pl[p]
 task put(input [15:0] addr, input [7:0] m, input [63:0] pl);
 	begin
-		mem[{addr, 3'b000}] = {8'h00, m};
-		mem[{addr, 3'b001}] = pl[15:0];
-		mem[{addr, 3'b010}] = pl[31:16];
-		mem[{addr, 3'b011}] = pl[47:32];
-		mem[{addr, 3'b100}] = pl[63:48];
+		mem[{pb, addr[13:0], 3'b000}] = {8'h00, m};
+		mem[{pb, addr[13:0], 3'b001}] = pl[15:0];
+		mem[{pb, addr[13:0], 3'b010}] = pl[31:16];
+		mem[{pb, addr[13:0], 3'b011}] = pl[47:32];
+		mem[{pb, addr[13:0], 3'b100}] = pl[63:48];
 	end
 endtask
 
@@ -65,6 +67,11 @@ initial begin
 	for (p = 1; p < 8; p = p + 1) put(16'h8010 + p, 8'h55, {8{8'hA0 + p[7:0]}});
 	for (p = 1; p < 8; p = p + 1) put(16'h9010 + p, 8'h55, {8{8'hA0 + p[7:0]}});
 	put(16'h7015, 8'h55, {8{8'hEE}});
+	// bank 3 at the same addresses: another table entry, other entries of the lanes
+	pb = 4'd3;
+	put(16'h8040, 8'h34, {8{8'h34}});
+	for (p = 1; p < 8; p = p + 1) put(16'h8010 + p, 8'h55, {8{8'hB0 + p[7:0]}});
+	pb = 4'd2;
 	#20 reset = 0;
 	#40;   // prev_rd of sram.v is not reset: a clock with rd = 0 first
 
@@ -106,6 +113,15 @@ initial begin
 	read(16'h8040);
 	expect({8{8'h12}}, "not a table page");
 	lane_pages = 24'h000080;
+
+	// bank 3: the word and the entries of the lanes of bank 3
+	bank = 4'd3;
+	read(16'h8040);
+	expect({8'hB7, 8'hB6, 8'hB5, 8'hB4, 8'hB3, 8'hB2, 8'hB1, 8'h34}, "bank 3");
+	lane_en = 0;
+	read(16'h8040);
+	expect({8{8'h34}}, "bank 3, lane_en off");
+	bank = 4'd2;
 
 	$display("tb_sram: %0d errors", errors);
 	$finish;
