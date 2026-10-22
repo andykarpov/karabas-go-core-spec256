@@ -52,7 +52,9 @@ entity spec256 is
 generic (
     -- operands of the instruction stream (LD A,n ...) of the lanes: from the main memory (NextTang)
     -- or from the lane planes (GZX), see docs/SIMD.md 1.2
-    GFX_INST_FROM_MAIN : boolean := true
+    GFX_INST_FROM_MAIN : boolean := true;
+    -- the highest burst sck of the mcu link in the CAPS answer, MHz (0: the normal link clock), see kg_mcu
+    BURST_MAX_MHZ      : integer := 0
 );
 port (
     -- Clock
@@ -70,7 +72,8 @@ port (
     MCU_SCK     : in  std_logic;
     MCU_MOSI    : in  std_logic;
     MCU_MISO    : out std_logic;
-    MCU_IO      : in  std_logic_vector(3 downto 0);
+    MCU_IO      : in  std_logic_vector(3 downto 0);  -- [0] burst cs_n, [2] sd2 cs_n, [3] ft cs_n
+    MCU_BURST_READY : out std_logic;
 
     -- VGA
     VGA_RGB     : out std_logic_vector(23 downto 0);
@@ -110,7 +113,7 @@ signal cpu_mreq_n    : std_logic;
 signal cpu_iorq_n    : std_logic;
 signal cpu_wr_n      : std_logic;
 signal cpu_rd_n      : std_logic;
-signal cpu_int_n     : std_logic;
+signal cpu_int_n     : std_logic := '1';
 signal cpu_m1_n      : std_logic;
 signal cpu_nmi_n     : std_logic;
 signal cpu_ena       : std_logic;
@@ -169,11 +172,15 @@ signal regs          : std_logic_vector(223 downto 0);
 signal regs_wr       : std_logic := '0';
 signal softsw_command: std_logic_vector(15 downto 0);
 signal osd_command   : std_logic_vector(15 downto 0);
+signal osd_command_s1, osd_command_s2, osd_command_vga : std_logic_vector(15 downto 0) := (others => '0');
+signal softsw_regs   : std_logic_vector(10*8-1 downto 0);
+signal vga_rgb_core  : std_logic_vector(23 downto 0);
 signal kb_nmi        : std_logic := '0';
 signal kb_reset      : std_logic := '0';
 signal kb_pause      : std_logic := '0';
 signal kb_video_mode : std_logic := '0';
 signal mcu_busy      : std_logic := '1';
+signal mcu_n_reset   : std_logic;
 
 -- Video
 signal vga_addr      : std_logic_vector(12 downto 0);
@@ -192,6 +199,8 @@ signal sync_blank    : std_logic;
 signal sync_int      : std_logic;
 
 -- CLOCK
+signal pll_clk       : std_logic_vector(5 downto 0);
+signal pll_locked    : std_logic;
 signal clk_tmds      : std_logic;
 signal clk_sdram     : std_logic;
 signal clk_sdram_out : std_logic;
@@ -199,6 +208,8 @@ signal clk_sdram_out : std_logic;
 -- System
 signal selector      : std_logic_vector(2 downto 0);
 signal inta_n        : std_logic;
+signal int_sync      : std_logic_vector(2 downto 0) := "000";
+signal int_cnt       : unsigned(4 downto 0) := (others => '0');
 
 -- SDRAM
 signal sdram_addr    : std_logic_vector(21 downto 0);
@@ -211,16 +222,32 @@ signal sdram_rdy     : std_logic := '0';
 
 begin
 
--- PLL
-U1: entity work.clock
+-- PLL: 50 MHz -> 56.25 MHz (the CPU, SRAM, MCU link), the same at 180 degrees, 25 MHz (VGA);
+-- VCO 675 MHz, phase 0: the clocks are related (karabas-go-modules kg_pll: IBUFG, PLL_BASE, BUFG)
+U1: entity work.kg_pll
+generic map (
+    DIVCLK_DIVIDE       => 2,
+    CLKFBOUT_MULT       => 27,
+    CLKOUT0_DIVIDE      => 12,    -- 56.25
+    CLKOUT1_DIVIDE      => 12,    -- 56.25 @ 180
+    CLKOUT1_PHASE       => 180.0,
+    CLKOUT2_DIVIDE      => 27,    -- 25.00
+    CLKOUT3_DIVIDE      => 27,    -- not used
+    CLKOUT4_DIVIDE      => 27,
+    CLKOUT5_DIVIDE      => 27,
+    BUFG_MASK           => 7      -- 6'b000111: BUFGs on the three clocks
+)
 port map (
-    clk                 => CLK_50MHZ,
-    areset              => areset,
-    clk_sdr             => clk_sdram,        -- 56.00 MHz
-    clk_sdr_out         => clk_sdram_out,    -- 56.00 MHz @ 180
-    clk_vga             => clk_vga           -- 25.20 MHz
+    clk_in              => CLK_50MHZ,
+    rst                 => '0',
+    clk_out             => pll_clk,
+    locked              => pll_locked
 );
-    
+clk_sdram     <= pll_clk(0);
+clk_sdram_out <= pll_clk(1);
+clk_vga       <= pll_clk(2);
+areset        <= not pll_locked;
+
 -- CPU: the main Z80 and the 8 graphical lanes of Spec256 (docs/SIMD.md)
 U2: entity work.T80se_S256
 generic map (
@@ -317,48 +344,70 @@ port map (
 );
 
 -- VRAM 8K x 8bit
-U6: entity work.dpram2
+U6: entity work.kg_sdpram
 generic map (
-    addr_width_g        => 13,
-    data_width_g        => 8
+    DW                  => 8,
+    AW                  => 13
 )
 port map (
-    addr_a_i            => vram_addr,
-    addr_b_i            => vga_addr,
-    clk_a_i             => clk_sdram,
-    clk_b_i             => clk_vga,
-    data_a_i            => vram_di,
-    we_i                => vram_wr,
-    data_b_o            => vga_data
+    clka                => clk_sdram,
+    wea                 => vram_wr,
+    addra               => vram_addr,
+    dina                => vram_di,
+    clkb                => clk_vga,
+    enb                 => '1',
+    addrb               => vga_addr,
+    doutb               => vga_data
 );
 
 -- VRAM 8K x 64bit
-U7: entity work.dpram2
+U7: entity work.kg_sdpram
 generic map (
-    addr_width_g        => 13,
-    data_width_g        => 64
+    DW                  => 64,
+    AW                  => 13
 )
 port map (
-    addr_a_i            => vram_gfx_addr,
-    addr_b_i            => vga_gfx_addr,
-    clk_a_i             => clk_sdram,
-    clk_b_i             => clk_vga,
-    data_a_i            => vram_gfx_di,
-    we_i                => vram_gfx_wr,
-    data_b_o            => vga_gfx_data
+    clka                => clk_sdram,
+    wea                 => vram_gfx_wr,
+    addra               => vram_gfx_addr,
+    dina                => vram_gfx_di,
+    clkb                => clk_vga,
+    enb                 => '1',
+    addrb               => vga_gfx_addr,
+    doutb               => vga_gfx_data
 );
 
--- MCU
-U9: entity work.mcu
-port map(
+-- MCU link (karabas-go-modules kg_mcu): keyboard, joysticks, OSD, soft switches, the rom loader and the
+-- file loader of the FL item (.256, the ioctl commands, a write for each byte, bursts)
+U9: entity work.kg_mcu
+generic map (
+    BURST_MAX_MHZ       => BURST_MAX_MHZ,
+    CS_FILTER           => 3,
+    ENABLE_RTC          => 0,
+    ENABLE_UART         => 0,
+    ENABLE_MATRIX       => 0,
+    ENABLE_DEBUG        => 0,
+    ENABLE_IMG          => 0,
+    ENABLE_FILE         => 1,
+    FILE_CMDS           => 0,
+    FILE_WR_EACH        => 1,
+    FILE_TO_ROM         => 0,
+    ENABLE_FT           => 0,
+    ENABLE_SD2          => 0
+)
+port map (
     CLK                 => clk_sdram,
-    N_RESET             => not areset,
-    
+    N_RESET             => mcu_n_reset,
+
     MCU_MOSI            => MCU_MOSI,
     MCU_MISO            => MCU_MISO,
     MCU_SCK             => MCU_SCK,
     MCU_SS              => MCU_CS_N,
-    
+    MCU_SPI_FT_SS       => MCU_IO(3),
+    MCU_SPI_SD2_SS      => MCU_IO(2),
+    MCU_BURST_CS_N      => MCU_IO(0),
+    MCU_BURST_READY     => MCU_BURST_READY,
+
     KB_STATUS           => hid_kb_status,
     KB_DAT0             => hid_kb_dat0,
     KB_DAT1             => hid_kb_dat1,
@@ -366,11 +415,27 @@ port map(
     KB_DAT3             => hid_kb_dat3,
     KB_DAT4             => hid_kb_dat4,
     KB_DAT5             => hid_kb_dat5,
-    
+
     JOY_L               => joy_l,
     JOY_R               => joy_r,
-    
-    ROMLOAD_ACTIVE      => romloader_act,
+
+    RTC_A               => x"00",
+    RTC_DI              => x"00",
+    RTC_CS              => '0',
+    RTC_WR_N            => '1',
+
+    UART_TX_DATA        => x"00",
+    UART_TX_WR          => '0',
+    UART_TX_MODE        => '0',
+    UART_DLM            => x"00",
+    UART_DLL            => x"00",
+    UART_DLM_WR         => '0',
+    UART_DLL_WR         => '0',
+
+    SOFTSW_COMMAND      => softsw_command,
+    OSD_COMMAND         => osd_command,
+
+    ROMLOADER_ACTIVE    => romloader_act,
     ROMLOAD_ADDR        => romloader_a,
     ROMLOAD_DATA        => romloader_do,
     ROMLOAD_WR          => romloader_wr,
@@ -379,14 +444,23 @@ port map(
     FILELOAD_ADDR       => fileloader_a,
     FILELOAD_DATA       => fileloader_do,
     FILELOAD_WR         => fileloader_wr,
-    
-    SOFTSW_COMMAND      => softsw_command,    
-    OSD_COMMAND         => osd_command,
 
-    DVI_ONLY            => DVI_ONLY,    
+    FT_MISO             => '1',
+    SD2_MISO            => '1',
+
+    MATRIX_CMD          => x"000000",
+    MATRIX_CMD_WR       => '0',
+    DEBUG_ADDR          => x"0000",
+    DEBUG_DATA          => x"0000",
+    IMG_Q_WR            => '0',
+    IMG_Q_DI            => x"000000",
+    ESP_UART_RX_DATA    => x"00",
+    ESP_UART_RX_WR      => '0',
+
+    DVI_ONLY            => DVI_ONLY,
     BUSY                => mcu_busy
-    
 );
+mcu_n_reset <= not areset;
 
 -- USB HID parser / transformer to 8x5 matrix + joy mapper on keyboard
 U10: entity work.hid_parser
@@ -417,38 +491,71 @@ port map (
     KB_DO               => kb_do
 );
 
--- Soft switches parser from MCU
-U11: entity work.soft_switches
+-- Soft switches of the OSD (karabas-go-modules kg_soft_switches): register n is the osd item n of the
+-- core json (core.json, core_mini.json and core_minig.json have the same items)
+U11: entity work.kg_soft_switches
+generic map (
+    N                   => 10
+)
 port map (
-    CLK                 => clk_sdram,    
-    SOFTSW_COMMAND      => softsw_command,    
-    JOY_TYPE_L          => kb_joy_type_l,
-    JOY_TYPE_R          => kb_joy_type_r,
-    MODE                => kb_video_mode,
-    PAUSE               => kb_pause,
-    NMI                 => kb_nmi,
-    RESET               => kb_reset
+    clk                 => clk_sdram,
+    command             => softsw_command,
+    regs                => softsw_regs,
+    upd                 => open
 );
+kb_joy_type_l <= softsw_regs(4*8+2 downto 4*8);    -- Joystick L
+kb_joy_type_r <= softsw_regs(5*8+2 downto 5*8);    -- Joystick R
+kb_video_mode <= softsw_regs(6*8);                 -- GFX 256
+kb_pause      <= softsw_regs(7*8);                 -- Pause
+kb_nmi        <= softsw_regs(8*8);                 -- NMI
+kb_reset      <= softsw_regs(9*8);                 -- Reset
 
--- osd overlay
-U12: entity work.overlay
+-- OSD (karabas-go-modules kg_osd_overlay) on the VGA clock. OSD_COMMAND comes from the clock of the mcu
+-- link: taken when two samples in a row are the same, so a word caught while it changes is not a command.
+process (clk_vga)
+begin
+    if rising_edge(clk_vga) then
+        osd_command_s1 <= osd_command;
+        osd_command_s2 <= osd_command_s1;
+        if osd_command_s1 = osd_command_s2 then
+            osd_command_vga <= osd_command_s2;
+        end if;
+    end if;
+end process;
+
+vga_rgb_core <= vga_r & vga_g & vga_b;
+
+U12: entity work.kg_osd_overlay
+generic map (
+    H_OFFSET            => 48,
+    V_OFFSET            => 40
+)
 port map (
-    CLK                 => clk_vga,
-    RGB_I               => vga_r & vga_g & vga_b,
-    RGB_O               => vga_rgb,
-    HSYNC_I             => sync_hsync,
-    VSYNC_I             => sync_vsync,    
-    OSD_COMMAND         => osd_command
+    clk                 => clk_vga,
+    rgb_i               => vga_rgb_core,
+    rgb_o               => VGA_RGB,
+    hsync_i             => sync_hsync,
+    vsync_i             => sync_vsync,
+    osd_command         => osd_command_vga
 );
 
 -------------------------------------------------------------------------------
 -- Формирование глобальных сигналов
-process (sync_int, inta_n)
+-- INT: from the rising sync_int (VGA clock, through two flip-flops) for 32 T-states, as the ULA of the
+-- 48K holds it, or until the CPU acknowledges it. It was a flip-flop clocked by sync_int and reset by
+-- inta_n, held until the acknowledge: an INT in DI fired after the next EI, anywhere in the frame.
+process (clk_sdram)
 begin
-    if inta_n = '0' then
-        cpu_int_n <= '1';
-    elsif sync_int'event and sync_int = '1' then
-        cpu_int_n <= '0';
+    if rising_edge(clk_sdram) then
+        int_sync <= int_sync(1 downto 0) & sync_int;
+        if int_sync(2 downto 1) = "01" then
+            cpu_int_n <= '0';
+            int_cnt <= (others => '0');
+        elsif inta_n = '0' or int_cnt = 31 then
+            cpu_int_n <= '1';
+        elsif cpu_ena = '1' and cpu_int_n = '0' then
+            int_cnt <= int_cnt + 1;
+        end if;
     end if;
 end process;
 

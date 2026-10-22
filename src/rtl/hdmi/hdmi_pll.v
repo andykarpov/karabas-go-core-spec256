@@ -39,7 +39,7 @@ DCM_SP
     .CLKFX_DIVIDE          (1),
     .CLKFX_MULTIPLY        (5),
     .CLKIN_DIVIDE_BY_2     ("FALSE"),
-    .CLKIN_PERIOD          (39.680), // 25.2 mhz
+    .CLKIN_PERIOD          (40.000), // 25 MHz (the PLL of spec256.vhd: 675 / 27)
     .CLKOUT_PHASE_SHIFT    ("NONE"),
     .CLK_FEEDBACK          ("1X"),
     .DESKEW_ADJUST         ("SYSTEM_SYNCHRONOUS"),

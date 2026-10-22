@@ -29,6 +29,9 @@ MAP_T_minig = 1
 MAP_OPT_minig = -logic_opt off -ol high -xt 0 -register_duplication off -r 4 -global_opt off -mt off -ir off -pr b -lc area -power off
 PAR_OPT_minig = -ol high -mt off
 
+# included by the sources, not in the prj
+INCLUDES = $(wildcard ../modules/rtl/mcu/*.vh)
+
 .PHONY: all clean $(BOARDS) $(BOARDS:=-xst) $(BOARDS:=-impl) $(BOARDS:=-core) $(BOARDS:=-report)
 
 all: $(BOARDS)
@@ -36,7 +39,7 @@ all: $(BOARDS)
 define board
 SRC_$(1) := $$(shell sed -n 's/^[a-z]* work "\(.*\)"/\1/p' karabas_$(1).prj)
 
-karabas_$(1).ngc: karabas_$(1).prj karabas_$(1).xst $$(SRC_$(1))
+karabas_$(1).ngc: karabas_$(1).prj karabas_$(1).xst $$(SRC_$(1)) $(INCLUDES)
 	mkdir -p xst/projnav.tmp
 	$(XIL) xst -intstyle ise -ifn karabas_$(1).xst -ofn karabas_$(1).syr
 

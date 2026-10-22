@@ -106,7 +106,7 @@ entity karabas_minig is
     MCU_SCK              : in       std_logic;
     MCU_MOSI             : in       std_logic;
     MCU_MISO             : out      std_logic;
-    MCU_IO               : in       std_logic_vector(5 downto 0);
+    MCU_IO               : inout    std_logic_vector(5 downto 0);  -- [0] burst cs_n, [1] burst ready, [2] sd2 cs_n, [3] ft cs_n
           
     MIDI_TX              : out      std_logic;
 
@@ -134,10 +134,25 @@ signal adc_l, adc_r : std_logic_vector(23 downto 0);
 signal hdmi_rgb : std_logic_vector(23 downto 0);
 signal hdmi_hsync, hdmi_vsync, hdmi_blank : std_logic;
 signal dvi_only : std_logic;
+signal vid_de, audio_en : std_logic;
+signal mcu_sck_ib, mcu_sck_g : std_logic;
+signal mcu_burst_ready : std_logic;
 
 begin
 
+-- MCU_SCK on a global buffer (the pin of rev.G is a global clock pin): on local routing the flip-flops of
+-- the SPI receiver had several ns of clock skew in tsconf (hold not met)
+u_mcu_sck_ibufg: IBUFG port map (I => MCU_SCK, O => mcu_sck_ib);
+u_mcu_sck_bufg: BUFG port map (I => mcu_sck_ib, O => mcu_sck_g);
+
+MCU_IO(1) <= mcu_burst_ready;
+MCU_IO(0) <= 'Z';
+MCU_IO(5 downto 2) <= "ZZZZ";
+
 U1: entity work.spec256
+generic map(
+    BURST_MAX_MHZ     => 32        -- bursts of the .256 at 32 MHz (MCU_SCK on a global clock pin)
+)
 port map(
     -- clock
     CLK_50MHZ         => CLK_50MHZ,
@@ -151,10 +166,11 @@ port map(
 
     -- mcu
     MCU_CS_N          => MCU_CS_N,
-    MCU_SCK           => MCU_SCK,
+    MCU_SCK           => mcu_sck_g,
     MCU_MOSI          => MCU_MOSI,
     MCU_MISO          => MCU_MISO,
     MCU_IO            => MCU_IO(3 downto 0),
+    MCU_BURST_READY   => mcu_burst_ready,
 
     -- rgb
     VGA_RGB           => vid_rgb,
@@ -185,9 +201,10 @@ port map(
 );
 
 -- HDMI encoder
-U2: entity work.zhdmi_top
+U2: entity work.hdmi_top
 generic map(
-    SAMPLERATE        => 44100
+    SAMPLERATE        => 44100,
+    CLKRATE           => 25000000
 )
 port map(
     clk               => clk_vga,
@@ -195,30 +212,31 @@ port map(
     vga_rgb           => vid_rgb,
     vga_hs            => vid_hs,
     vga_vs            => vid_vs,
-    vga_de            => not vid_blank,
-    audio_en          => not dvi_only,
+    vga_de            => vid_de,
+    audio_en          => audio_en,
     audio_l           => audio_mix_l,
     audio_r           => audio_mix_r,
     tmds_p            => TMDS_P,
     tmds_n            => TMDS_N
 );
+vid_de   <= not vid_blank;
+audio_en <= not dvi_only;
 
--- DAC
-U3: entity work.PCM5102
+-- I2S DAC (karabas-go-modules kg_pcm5102: all 16 bits, pcm5102.v sent 15 of them)
+U3: entity work.kg_pcm5102
 generic map(
-    DAC_CLK_DIV_BITS => 4
+    DIV_BITS          => 4
 )
 port map(
-    clk              => CLK_BUS,
-    reset            => areset,
-    left             => audio_mix_l,
-    right            => audio_mix_r,
-    bck              => DAC_BCK,
-    lrck             => DAC_WS,
-    din              => DAC_DAT
+    clk               => clk_bus,
+    reset             => areset,
+    left              => audio_mix_l,
+    right             => audio_mix_r,
+    bck               => DAC_BCK,
+    lrck              => DAC_WS,
+    din               => DAC_DAT
 );
 
--- unused signals
 FT_SPI_CS_N         <= '1';
 FT_SPI_SCK          <= '1';
 FT_SPI_MOSI         <= '1';

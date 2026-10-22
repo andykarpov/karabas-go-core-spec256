@@ -222,7 +222,35 @@ NET "FLASH_SCK"        LOC="R11"    | IOSTANDARD = LVCMOS33; # CONF_CLK
 NET "FLASH_WP_N"       LOC="N12"    | IOSTANDARD = LVCMOS33; # CONF_IO2
 NET "FLASH_HOLD_N"     LOC="P12"    | IOSTANDARD = LVCMOS33; # CONF_IO3
 
-# Timings
+# Timing constraints
+#
+# Clocks, all from one PLL on CLK_50MHZ (VCO 675 MHz, spec256.vhd), phase 0:
+#   CLKOUT0 56.25 MHz clk_bus: the CPU (T80se_S256, CLKEN 3.5 MHz), the SRAM controller, the MCU link, the
+#                     soft switches, the loaders, the VRAM write ports
+#   CLKOUT1 56.25 MHz at 180 degrees: the ODDR2 of SDR_CLK (the SDRAM is not used)
+#   CLKOUT2 25.00 MHz clk_vga: sync, vga_spec256, the OSD, the VRAM read ports; hdmi_pll (DCM_SP) makes the
+#                     pixel clock (CLK0, phase aligned) and the 5x serial clocks from it
+# The PERIOD of CLK_50MHZ is derived onto every PLL and DCM output.
+NET "CLK_50MHZ" TNM_NET = "CLK_50MHZ";
+TIMESPEC "TS_CLK_50MHZ" = PERIOD "CLK_50MHZ" 20 ns HIGH 50%;
 
-NET "MCU_SCK" TNM_NET = "clk_mcu";
-TIMESPEC "TS_CLK_MCU" = PERIOD "clk_mcu" 30 MHz;
+NET "clk_bus" TNM_NET = "TG_CLK_BUS";
+NET "clk_vga" TNM_NET = "TG_CLK_VGA";
+NET "U2/clk_pix" TNM_NET = "TG_CLK_PIX";
+
+# MCU link (kg_mcu): SPI mode 0 from the RP2040 at 16 MHz, bursts at 32 MHz (BURST_MAX_MHZ of the top).
+NET "MCU_SCK" TNM_NET = "TG_CLK_MCU";
+TIMESPEC "TS_CLK_MCU" = PERIOD "TG_CLK_MCU" 32 MHz;
+# MCU_SCK is not related to CLK_50MHZ. kg_mcu crosses with toggle synchronisers and holds the data registers
+# for 8 SCK periods (a received byte) or from the request to the next SCK edges (a reply word): the data paths
+# are bounded by one SCK period (as in karabas-go-core-tsconf).
+TIMESPEC "TS_MCU_TO_BUS" = FROM "TG_CLK_MCU" TO "TG_CLK_BUS" 31.25 ns DATAPATHONLY;
+TIMESPEC "TS_BUS_TO_MCU" = FROM "TG_CLK_BUS" TO "TG_CLK_MCU" 31.25 ns DATAPATHONLY;
+
+# clk_bus -> clk_vga / the pixel clock: 56.25 and 25 MHz from one VCO, their nearest edges 2.2 ns apart. The
+# design does not rely on that phase: what crosses goes into two flip-flops (sync_int back to clk_bus, the
+# OSD command, the audio of hdmi_top) or is a static setting read on every pixel (the border, the GFX 256
+# mode). The VRAMs are block RAMs with a port on each clock. The data paths are bounded by one clk_vga period.
+TIMESPEC "TS_BUS_TO_VGA" = FROM "TG_CLK_BUS" TO "TG_CLK_VGA" 40 ns DATAPATHONLY;
+TIMESPEC "TS_VGA_TO_BUS" = FROM "TG_CLK_VGA" TO "TG_CLK_BUS" 17.7 ns DATAPATHONLY;
+TIMESPEC "TS_BUS_TO_PIX" = FROM "TG_CLK_BUS" TO "TG_CLK_PIX" 40 ns DATAPATHONLY;

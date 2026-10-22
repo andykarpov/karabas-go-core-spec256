@@ -4,51 +4,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-FPGA core for the Karabas Go family of boards: a port of MVV's ReVerSE-U16 **Spec256** core (ZX Spectrum 48K with 256-colour graphics, where 8 "virtual" Z80s run the same program on 8 bitplanes of graphics data). Written in VHDL/Verilog for Xilinx Spartan-6 (xc6slx25-ftg256), built with **Xilinx ISE** (no Makefile, simulation, or tests in the repo). Code comments are often in Russian.
+FPGA core for the Karabas Go / Mini / Mini G boards: **Spec256** (a ZX Spectrum 48K whose games carry 256-colour graphics in 8 bitplanes) on Xilinx Spartan-6 XC6SLX25-ftg256-2, ISE 14.7 (XST). `docs/SIMD.md` (Russian) is the design document: how Spec256 works (the execution contract of GZX and NextTang), why the old branches were wrong, the SIMD CPU, the tests and the plan with its state. Read it before changing the CPU, the loader or the video.
 
-All sources live under `src/`; paths in the `.xise` projects are relative to `src/`.
+Branch `spec256-simd` is the current work. Only the **Mini G** is converted to the new CPU, the command line build and karabas-go-modules; the Mini and the Go still have their `.xise` projects on the old `T80se64` and old modules and do not build against the current `spec256.vhd` (plan item 11).
 
-## Board variants
+## Build (Mini G)
 
-| Board | ISE project | Top entity | UCF | Bitstream | core json | Packaged core |
-|---|---|---|---|---|---|---|
-| Karabas Go | `karabas-go.xise` | `karabas_go_top.vhd` | `karabas_go.ucf` | `karabas_go.bin` | `core.json` | — |
-| Karabas Mini | `karabas-mini.xise` | `karabas_mini_top.vhd` | `karabas_mini.ucf` | `karabas_mini.bin` | `core_mini.json` | `spec256.kg2` |
-| Karabas Mini G | `karabas-minig.xise` | `karabas_minig_top.vhd` | `karabas_minig.ucf` | `karabas_minig.bin` | `core_minig.json` | `spec256.kg3` |
+- `cd src && make minig` (synthesis, implementation, bitstream, `spec256.kg3`); one step: `make minig-xst`, `-impl`, `-core`; `make minig-report` prints LUTs, slices, block RAMs and the timing result. It sources `/opt/Xilinx/14.7/ISE_DS/settings64.sh` (`ISE_SETTINGS=`). The options are those of the former `.xise` (area strategy).
+- Inputs: `karabas_minig.prj` (the source list; the shared modules as `"../modules/rtl/..."`), `.xst`, `.ucf`, `.ut`; they are exceptions in `.gitignore`.
+- `src/make_core.py` and `src/games/spec256.py` are symlinks into the sibling repo **karabas-go-tools** (check it out next to this one); changes to the converter go there.
+- `modules/` is the git submodule **karabas-go-modules** (`git submodule update --init`): `kg_mcu`, `kg_soft_switches`, `kg_osd_overlay`, `kg_sdpram`, `kg_pll`, `kg_pcm5102`, `hdmi_tx` (zhdmi). Its `CLAUDE.md` and `docs/PLAN.md` have the rules (Verilog-2001 for XST, tests, LUT and timing checks). A change to a module is made there.
 
-Each board top only adapts board I/O (HDMI/DVI encoders, audio DAC, MCU SPI) and instantiates the shared `rtl/spec256.vhd`. Mini/Mini G output HDMI via `rtl/hdmi/zhdmi_top.v` + `rtl/zhdmi/*`; Go uses `pcm5102.v` for audio.
+Convert a game (`NAME.SNA` + `NAME.GFX` side by side): `python3 src/games/spec256.py src/games/EXOLON.SNA` (writes `EXOLON.256`).
 
-**Branch `simd` caveat:** only `karabas-mini.xise` has been updated to the new SIMD design (`rtl/cpu/gfx_cpu.vhd`). `karabas-go.xise` and `karabas-minig.xise` still list the old `rtl/cpu/T80se64.vhd` (8 parallel T80s) and don't include `gfx_cpu.vhd`, so they won't build against the current `spec256.vhd` until their file lists are updated. `core_mini.json` also has an extra "GFX 256" on/off OSD switch that the other jsons lack.
+## Tests (`src/sim`)
 
-## Commands
+- `run_s256_sim.sh [cycles]` (ghdl): `tb_s256.vhd` runs `T80se` and `T80se_S256` on the games and on random code (`gen_random.py`); every clock the main CPU is compared with T80se and, with the planes equal to the SNA RAM, every lane with the main CPU. About 2 minutes at 200000 clocks. `GAMES=`, `SEEDS=` pick a subset.
+- `tb_vga.vhd` (ghdl, see its header): the 0xFF passthrough of `vga_spec256` against the ordinary mode.
+- `tb_hid.vhd` (ghdl, see its header): `hid_parser`, USB report keys to the ZX matrix.
+- `run_load_sim.sh [GAME]` (ISim): `tb_load.vhd`, the ROM and a `.256` through `kg_mcu` in 32 MHz bursts into a model of the SRAM; checks every byte and the start of the CPU with the registers of the snapshot.
+- A test counts only if it fails when the code it covers is broken: check new tests with a mutation in a scratch copy.
 
-Synthesize/implement in ISE (open the `.xise`, Generate Programming File; bitgen must produce the `.bin`). Then package a core file for the Karabas Go firmware (run from `src/`):
+## Architecture (`src/rtl/spec256.vhd`)
 
-```sh
-python3 make_core.py core_mini.json spec256.kg2
-python3 make_core.py core_minig.json spec256.kg3
-```
-
-Convert a Spec256 game (`NAME.SNA` + `NAME.GFX` side by side) into the `.256` format loaded by the core:
-
-```sh
-python3 src/games/spec256.py src/games/EXOLON.SNA   # writes EXOLON.256 next to it (needs numpy)
-```
-
-## Architecture (`rtl/spec256.vhd`)
-
-- **Clocks** (`rtl/clock/clock.vhd`): 56 MHz system/memory clock (`clk_sdram`, also the CPU clock gated by `cpu_ena`), 25.2 MHz VGA clock.
-- **CPU0**: a single `t80se` (Z80) running the real program. The T80 sources in `rtl/cpu/` are **locally modified**: extra ports `MC_O`, `TS_O`, `IR_O`, `PC_O`, `REG` (expose internal state) and `DIR`/`DIRSet` (load all registers at once, used to restore snapshot registers). Keep these when touching T80 files.
-- **GFX SIMD extender** (`rtl/cpu/gfx_cpu.vhd`, `U8`): instead of 8 extra Z80s, it snoops CPU0's bus, opcode bytes, M-cycle/T-state and registers, decodes the instructions that move/compute data (LD A,(HL)/(BC)/(DE)/(nn)/(IX+d)/(IY+d), ALU ops with (HL), POP AF, LDI/LDIR…), and applies them to an 8-lane vector register file (8×8-bit). It produces the 64-bit `gfx_do` written to memory alongside CPU0's byte.
-- **Memory** (`rtl/memory/sram.v`): external SRAM accessed as 72-bit words — bits `[7:0]` are CPU0's byte, `[71:8]` are the 8 graphic bitplane bytes for the same address — with a 9-bit write mask and a `do_rdy` strobe consumed by `gfx_cpu`. ROM area (`0000–3FFF`) returns the CPU0 byte replicated to all 8 lanes.
-- **Video**: two dual-port VRAM copies of the screen area (`4000–5FFF`): 8K×8 (normal ZX screen) and 8K×64 (bitplanes). `rtl/video/vga_spec256.vhd` combines them into 256-colour output; `I_MODE` (OSD "GFX 256" switch) selects normal vs 256-colour. `sync.vhd` generates timing and the 50 Hz INT.
-- **MCU / OSD**: the board's MCU talks over SPI (`rtl/mcu/mcu.vhd`) providing USB HID keyboard/joysticks (`hid_parser.vhd` → ZX 8×5 matrix + Kempston/Sinclair/cursor/QAOP), soft switches from the OSD (`soft_switches*.vhd`), ROM loading and file loading. OSD menu items are defined in the `core*.json` files; the MCU sends each item's 0-based position in the `osd` list as the command index that `soft_switches*.vhd` decodes (e.g. in Mini: 4/5 = joysticks, 6 = GFX mode, 7 = pause, 8 = NMI, 9 = reset), so inserting/reordering json items requires updating the matching `soft_switches` file.
-- **File loader**: on `.256` load, bytes are routed by offset: `0–49151` → CPU0 RAM at `4000–FFFF`; `49152–442367` → bitplane RAM (8 bytes per address, assembled into 64-bit words); last 28 bytes → register image (`regs`, 224 bits, layout documented in `games/spec256.py`), applied via `DIRSet`, plus border colour. PC is set to `0x0072` (a RETN in the 48K ROM `roms/82.rom`) so execution resumes from the SNA's stacked PC.
+- **Clocks** (`kg_pll`, VCO 675 MHz): 56.25 MHz `clk_bus` (CPU with CLKEN 3.5 MHz from `sram.v`, SRAM, MCU link, loaders), 25 MHz VGA; `rtl/hdmi/hdmi_top.v` makes the pixel and 5x clocks with a DCM. The ucf has the constraints and explains each crossing.
+- **CPU** `rtl/cpu/T80_S256.vhd` (+ wrapper `T80se_S256.vhd`): T80 with its control and main data path unchanged plus 8 graphical lanes (`generate`) that repeat the data path (ACC, A', carry, register file, ALU, DO) on the control signals of the main CPU; the flags but the carry are the main CPU's. Lines marked `karabas:` are local changes. `T80.vhd` / `T80se.vhd` are kept as the reference of `tb_s256`. The T80 files keep the `DIR`/`DIRSet` snapshot-load ports.
+- **Lane data** (`spec256.vhd` data bus mux): RAM reads give each lane its plane, the ROM gives the ROM byte, I/O reads the port value; reads of the instruction stream (`INST`) give the main byte when `GFX_INST_FROM_MAIN` (open question, docs/SIMD.md 1.2).
+- **Memory** `rtl/memory/sram.v`: 72-bit words in the 16-bit SRAM, 5 accesses (`{a, 3'b000}` low byte = the main byte, words `001`–`100` = planes 0-1 … 6-7), write mask `wr_mask`.
+- **Video**: VRAM copies of `4000–5FFF` (8K×8 and 8K×64, `kg_sdpram`); `rtl/video/vga_spec256.vhd`: the default Spec256 palette (the `sp256.pal` of GZX), colour 0xFF shows the ordinary pixel (the gfx path is delayed 13 clocks to meet it), `I_MODE` = GFX 256 switch; `sync.vhd` timing and INT (32 T-states, synchronised to the CPU clock).
+- **MCU**: `kg_mcu` (ROM loader, IOCTL file loader with a write per byte, bursts up to `BURST_MAX_MHZ`), `hid_parser.vhd` (the ZX matrix and joysticks, core specific; one key of the report per clock, as in karabas-go-core-profi, for timing), `kg_soft_switches`: register n is the OSD item n of the core json. `core.json`, `core_mini.json` and `core_minig.json` must keep the same items (4/5 joysticks, 6 GFX 256, 7 pause, 8 NMI, 9 reset); a new item changes the index of those after it.
+- **File loader** (`.256`): bytes `0–49151` → RAM `4000–FFFF`; `49152–442367` → the planes (8 bytes per address); the last 28 → the registers (`regs`, layout in `games/spec256.py`), loaded into the CPU and all lanes with `DIRSet` when the load ends, with PC = `0x0072` (a RETN in `roms/82.rom`) so the snapshot resumes from its stacked PC.
 
 ## `.256` file format
 
-`49152` bytes SNA RAM + `49152×8` bytes bitplanes (for each address, 8 bytes where byte *n* holds bit *n* of the 8 GFX pixels — i.e. GFX is transposed into bitplanes; addresses whose GFX is all zero or contains `0xFF` fall back to the SNA byte in every plane) + `28` bytes registers = **442396** bytes. Input sizes are strict: SNA 49179 bytes, GFX 393216 bytes. If the loader offsets in `spec256.vhd` change, `games/spec256.py` must change with them (and vice versa).
-
-## `make_core.py`
-
-Shared across Karabas Go cores: builds the `kgo1` binary (header, bitstream, ROM block, OSD descriptor). OSD item types: `S`, `N`, `T`, `H`, `P` (text line), `F` (file mounter), `FL` (file loader). Hotkeys must be exactly one non-modifier key plus optional `Ctrl/Shift/Alt/Menu`.
+49152 bytes SNA RAM + 49152 × 8 bytes planes (for each address the 8 planes: bit k of plane p = bit p of the colour of pixel k, a plain transpose of the GFX) + 28 bytes registers = **442396** bytes. Input sizes are strict: SNA 49179, GFX 393216. The loader offsets in `spec256.vhd` and the converter go together.
