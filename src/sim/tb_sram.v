@@ -1,5 +1,5 @@
 // tb_sram: the lane reads of sram.v (lane_a / lane_en, T80_S256 GA): a lane reads its plane byte at
-// its own address only in the same 256-byte page, when the word at the address of the main CPU is not
+// its own address only in a page of lane_pages (the tables of reversed bytes), the same 256-byte page, when the word at the address of the main CPU is not
 // coloured (a table) and the 8 lane addresses are not all the same; otherwise it gets the plane of that
 // word.
 //   cd src/sim && sed 's/\bdo\b/dout/g; s/ = 9.b111111111,/,/' ../rtl/memory/sram.v > work/sram_t.v &&
@@ -11,6 +11,7 @@ module tb_sram;
 reg clk = 0, reset = 1, rd = 0, lane_en = 0;
 reg [15:0] a = 0;
 reg [127:0] lane_a = 0;
+reg [23:0] lane_pages = 24'h000080;   // a table of reversed bytes at 80xx
 wire [71:0] dout;
 wire [20:0] sram_a;
 wire [15:0] sram_d;
@@ -23,7 +24,7 @@ always #5 clk = ~clk;
 assign sram_d = (sram_rd_n == 2'b00) ? mem[sram_a[18:0]] : 16'bz;
 
 sram dut(.clk(clk), .reset(reset), .a(a), .di(72'd0), .dout(dout), .wr(1'b0), .wr_mask(9'h1FF),
-	.rd(rd), .lane_a(lane_a), .lane_en(lane_en), .cpu_ena(cpu_ena), .sram_a(sram_a), .sram_d(sram_d),
+	.rd(rd), .lane_a(lane_a), .lane_en(lane_en), .lane_pages(lane_pages), .cpu_ena(cpu_ena), .sram_a(sram_a), .sram_d(sram_d),
 	.sram_wr_n(sram_wr_n), .sram_rd_n(sram_rd_n), .busy(busy), .do_rdy(do_rdy));
 
 // the word of an address: main byte m, plane p = pl[p]
@@ -97,6 +98,14 @@ initial begin
 	for (p = 0; p < 8; p = p + 1) lane_a[16*p +: 16] = 16'h8013;
 	read(16'h8040);
 	expect({8{8'h12}}, "uniform");
+
+	// the page not a table of the game: the planes of a
+	lane_pages = 24'h000090;
+	for (p = 1; p < 8; p = p + 1) lane_a[16*p +: 16] = 16'h8010 + p;
+	lane_a[15:0] = 16'h8040;
+	read(16'h8040);
+	expect({8{8'h12}}, "not a table page");
+	lane_pages = 24'h000080;
 
 	$display("tb_sram: %0d errors", errors);
 	$finish;

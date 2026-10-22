@@ -10,7 +10,9 @@ module sram(
     input wire             rd,
 	 // karabas: the addresses of the 8 lanes (T80_S256 GA, lane p in bits 16p+15..16p) for a read with
 	 // lane_en: after the 72-bit word of a, the plane byte of a lane is read at its own address when
-	 // that is a table lookup with a byte of the lane: the same 256-byte page as a (only L differs),
+	 // that is a table lookup with a byte of the lane: a in one of lane_pages (the converter finds the
+	 // tables of reversed bytes that games flip their sprites with; other tables, masks, must give the
+	 // entry of the main byte), the same 256-byte page as a (only L differs),
 	 // the word of a not coloured (its 8 planes are the main byte: a table, not graphics) and the 8
 	 // lane addresses not all the same (the lanes hold the colours of a graphics byte). A lane
 	 // address that differs otherwise is a pointer or a coordinate gone apart from the main CPU (the
@@ -18,6 +20,7 @@ module sram(
 	 // the lane reads at a. The CPU waits on busy.
 	 input wire  [127:0]    lane_a,
 	 input wire             lane_en,
+	 input wire  [23:0]     lane_pages,   // the pages of the tables of reversed bytes (the .256), 0: none
 	 output wire            cpu_ena,
 
     output reg  [20:0]     sram_a = 0,
@@ -63,6 +66,8 @@ reg prev_rd, prev_wr;
 reg [127:0] laD;
 reg laEn;
 reg laUni;   // the 8 lane addresses are the same
+wire table_page = aD[15:8] != 8'h00 &&
+	(aD[15:8] == lane_pages[7:0] || aD[15:8] == lane_pages[15:8] || aD[15:8] == lane_pages[23:16]);
 reg [3:0] lp;
 // the word read is not coloured: every plane is the main byte (taken with the last 16 bits of the word,
 // before the bytes of the lanes replace planes in do)
@@ -204,7 +209,7 @@ begin
                     do_rdy <= 1;
                     state <= S_IDLE;
                 end
-                else if (laD[16*lp[2:0] +: 16] != aD && laD[16*lp[2:0] + 8 +: 8] == aD[15:8] && natural && !laUni) begin
+                else if (laD[16*lp[2:0] +: 16] != aD && laD[16*lp[2:0] + 8 +: 8] == aD[15:8] && natural && !laUni && table_page) begin
                     sram_a <= {laD[16*lp[2:0] +: 16], 3'b001 + lp[2:1]};
                     sram_rd_n <= 2'b00;
                     state <= S_LANE_DONE;

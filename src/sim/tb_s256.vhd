@@ -31,7 +31,8 @@ entity tb_s256 is
 		G_IMM_MASTER : boolean := true;   -- operands of the instruction stream from the main memory
 		G_CYCLES     : integer := 1000000;
 		G_TABLE      : boolean := false;  -- the lane address test of gen_table.py
-		G_LOG_GA     : boolean := false;  -- print the reads where a lane has an address of its own
+		G_LOG_GA     : boolean := false;
+		G_TABLE_PAGE : integer := 16#80#;  -- the page of the table of reversed bytes (the .256 header)  -- print the reads where a lane has an address of its own
 		G_TRACE      : string  := "";
 		G_MAX_REPORT : integer := 20
 	);
@@ -219,7 +220,8 @@ begin
 					end loop;
 					if not uni_ok then natural := false; end if;
 					uni_ok := false;
-					if d_ga_en = '1' and natural and d_ga(p*16+15 downto p*16+8) = d_a(15 downto 8) then
+					if d_ga_en = '1' and natural and d_ga(p*16+15 downto p*16+8) = d_a(15 downto 8) and
+					   to_integer(unsigned(d_a(15 downto 8))) = G_TABLE_PAGE then
 						la := to_integer(unsigned(d_ga(p*16+15 downto p*16)));
 						if G_LOG_GA and la /= a and d_mreq_n = '0' and d_rd_n = '0' and p = 0 then
 							report "GA pc " & integer'image(to_integer(unsigned(d_reg(79 downto 64)))) &

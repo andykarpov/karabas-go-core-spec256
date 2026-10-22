@@ -33,6 +33,17 @@ port (
 	I_HIDE_SAME	: in std_logic;	-- HideSameInkPaper
 	I_UP_MIXED	: in std_logic_vector(7 downto 0);	-- UpColorsMixed
 	I_DOWN_MIXED	: in std_logic_vector(7 downto 0);	-- DownColorsMixed
+	-- the background (docs/SIMD.md section 7): a line buffer of 2 x 256 pixels written on I_LB_CLK
+	-- (word I_LB_A = {line bit 0, x / 2}, the low byte the even pixel); at the start of each line y of
+	-- the paper the next one, O_BG_Y, is asked for by a toggle of O_BG_REQ
+	I_BG_ON		: in std_logic := '0';
+	I_BK_OVER_FF	: in std_logic := '0';	-- BkOverFF
+	I_LB_CLK	: in std_logic := '0';
+	I_LB_WE		: in std_logic := '0';
+	I_LB_A		: in std_logic_vector(7 downto 0) := (others => '0');
+	I_LB_D		: in std_logic_vector(15 downto 0) := (others => '0');
+	O_BG_REQ	: out std_logic;
+	O_BG_Y		: out std_logic_vector(7 downto 0);
     O_ADDR      : out std_logic_vector(12 downto 0);
 	O_GFX_ADDR	: out std_logic_vector(12 downto 0);
 	O_R		: out std_logic_vector(7 downto 0);	-- Red
@@ -71,6 +82,18 @@ architecture rtl of vga_spec256 is
 		return p;
 	end function;
 	signal pal : pal_t := pal_init(PAL_FILE);
+	signal pal2 : pal_t := pal_init(PAL_FILE);	-- a copy for the background (two reads per pixel)
+	type lb_t is array (0 to 255) of std_logic_vector(15 downto 0);
+	signal lb : lb_t;
+	signal lb_q		: std_logic_vector(15 downto 0);
+	signal bg_idx		: std_logic_vector(7 downto 0);
+	signal bg_rgb		: std_logic_vector(23 downto 0);
+	signal bg_req		: std_logic := '0';
+	signal bg_y		: std_logic_vector(7 downto 0) := (others => '0');
+	signal prev_y		: std_logic_vector(7 downto 0) := (others => '0');	-- a change starts a line of the Spectrum
+	signal cur_y0		: std_logic := '0';	-- bit 0 of the line of the paper being shown
+	signal gfx_x		: std_logic_vector(8 downto 0);	-- y bit 0, x
+	signal show_bg		: std_logic;
 
 -- ZX-Spectum screen
 	constant spec_border_left	: natural :=  32;	-- (640 - (spec_screen_h *2)) / 2 
@@ -92,7 +115,7 @@ architecture rtl of vga_spec256 is
 	-- the gfx pixel is 13 clocks ahead of the ordinary pixel of the same place: delayed to meet it
 	-- (0xFF shows the ordinary pixel through)
 	constant GFX_DELAY		: natural := 13;
-	type gfx_dl_t is array (1 to GFX_DELAY) of std_logic_vector(8 downto 0);
+	type gfx_dl_t is array (1 to GFX_DELAY) of std_logic_vector(17 downto 0);	-- y bit 0, x, paper, colour
 	signal gfx_dl			: gfx_dl_t;
 	signal gfx_px			: std_logic_vector(7 downto 0);
 	signal gfx_px_paper	: std_logic;
@@ -153,7 +176,10 @@ begin
 			when others =>	null;
 		end case;
 
-		gfx_dl(1) <= gfx_paper1 & gfx_pixel;
+		if spec_h_count_reg(0) = '1' then
+			gfx_x <= cur_y0 & spec_h_count_reg(8 downto 1);	-- the line and x of the pixel loaded now
+		end if;
+		gfx_dl(1) <= gfx_x & gfx_paper1 & gfx_pixel;
 		for i in 2 to GFX_DELAY loop
 			gfx_dl(i) <= gfx_dl(i-1);
 		end loop;
@@ -211,6 +237,55 @@ begin
 	end if;
 end process;
 
+-- the background: the line buffer read two clocks before the pixel leaves the delay line, the byte of
+-- the pixel one clock before, its colour from the copy of the palette with the pixel
+process (I_LB_CLK)
+begin
+	if rising_edge(I_LB_CLK) then
+		if I_LB_WE = '1' then
+			lb(to_integer(unsigned(I_LB_A))) <= I_LB_D;
+		end if;
+	end if;
+end process;
+
+process (I_PAL_CLK)
+begin
+	if rising_edge(I_PAL_CLK) then
+		if I_PAL_WR = '1' then
+			pal2(to_integer(unsigned(I_PAL_A))) <= I_PAL_D;
+		end if;
+	end if;
+end process;
+
+bg_idx <= lb_q(15 downto 8) when gfx_dl(GFX_DELAY-1)(9) = '1' else lb_q(7 downto 0);
+
+process (I_CLK)
+begin
+	if rising_edge(I_CLK) then
+		lb_q <= lb(to_integer(unsigned(gfx_dl(GFX_DELAY-2)(17 downto 10))));
+		bg_rgb <= pal2(to_integer(unsigned(bg_idx)));
+
+		-- the line of the paper, taken at the left edge (the counter steps at h_sync_on, while the last
+		-- pixels of the line are still loaded)
+		if spec_h_count_reg = 0 then
+			cur_y0 <= spec_v_count_reg(1);
+		end if;
+		-- the next line at the start of each line of the paper (line 0 after the last one)
+		prev_y <= spec_v_count_reg(8 downto 1);
+		if spec_v_count_reg(8 downto 1) /= prev_y and spec_v_count_reg(9 downto 1) < spec_screen_v then
+			if spec_v_count_reg(8 downto 1) = spec_screen_v - 1 then
+				bg_y <= (others => '0');
+			else
+				bg_y <= spec_v_count_reg(8 downto 1) + 1;
+			end if;
+			bg_req <= not bg_req;
+		end if;
+	end if;
+end process;
+
+O_BG_REQ <= bg_req;
+O_BG_Y <= bg_y;
+
 process (I_CLK, int_sig)
 begin
 	if (I_CLK'event and I_CLK = '1') then
@@ -245,11 +320,23 @@ std_rgb <= rgb(5 downto 4) & rgb(5 downto 4) & rgb(5 downto 4) & rgb(5 downto 4)
 -- below DownColorsMixed or above 255 - UpColorsMixed mixed half and half with the ordinary pixel
 p00 <= I_PAPER00INKFF when I_COLOUR_MODE = "00" else not I_COLOUR_MODE(1);
 
-process (I_COLOUR_MODE, gfx_px, gfx_rgb, std_rgb, ink6, paper6, same, p00, I_HIDE_SAME)
+-- with a background (ZX-Poly): colour 0 / 0xFF as paper / ink with Paper00InkFF; the background where
+-- the attribute flashes or hides (ink = paper) and, without Paper00InkFF, where the colour is 0 (and
+-- 0xFF with BkOverFF); in Pixel mode where the colour is 0
+show_bg <= '0' when I_BG_ON = '0' else
+	'1' when I_COLOUR_MODE = "11" and gfx_px = x"00" else
+	'0' when I_COLOUR_MODE = "11" else
+	'0' when p00 = '1' and (gfx_px = x"00" or gfx_px = x"FF") else
+	'1' when flashing = '1' or (I_HIDE_SAME = '1' and same = '1') else
+	'0' when p00 = '1' else
+	'1' when gfx_px = x"00" or (I_BK_OVER_FF = '1' and gfx_px = x"FF") else
+	'0';
+
+process (I_COLOUR_MODE, gfx_px, gfx_rgb, std_rgb, ink6, paper6, same, p00, I_HIDE_SAME, I_BG_ON)
 begin
 	if I_COLOUR_MODE = "11" then
 		if gfx_px = x"FF" then sel_rgb <= std_rgb; else sel_rgb <= gfx_rgb; end if;
-	elsif I_HIDE_SAME = '1' and same = '1' then
+	elsif I_HIDE_SAME = '1' and same = '1' and I_BG_ON = '0' then
 		sel_rgb <= ink6(5 downto 4) & ink6(5 downto 4) & ink6(5 downto 4) & ink6(5 downto 4) &
 			ink6(3 downto 2) & ink6(3 downto 2) & ink6(3 downto 2) & ink6(3 downto 2) &
 			ink6(1 downto 0) & ink6(1 downto 0) & ink6(1 downto 0) & ink6(1 downto 0);
@@ -283,14 +370,17 @@ begin
 end process;
 
 O_R <= (others => '0') when (I_BLANK = '1') else 
+		 bg_rgb(23 downto 16) when gfx_px_paper = '1' and I_MODE = '1' and show_bg = '1' else
 		 out_rgb(23 downto 16) when gfx_px_paper = '1' and I_MODE = '1' else
 		 std_rgb(23 downto 16) when paper1 = '1' and I_MODE = '0' else 
 		 (others => I_BORDER(1));
 O_G <= (others => '0') when (I_BLANK = '1') else 
+		 bg_rgb(15 downto 8) when gfx_px_paper = '1' and I_MODE = '1' and show_bg = '1' else
 		 out_rgb(15 downto 8) when gfx_px_paper = '1' and I_MODE = '1' else
 		 std_rgb(15 downto 8) when paper1 = '1' and I_MODE = '0' else 
 		 (others => I_BORDER(2));
 O_B <= (others => '0') when (I_BLANK = '1') else 
+		 bg_rgb(7 downto 0) when gfx_px_paper = '1' and I_MODE = '1' and show_bg = '1' else
 		 out_rgb(7 downto 0) when gfx_px_paper = '1' and I_MODE = '1' else
 		 std_rgb(7 downto 0) when paper1 = '1' and I_MODE = '0' else 
 		 (others => I_BORDER(0));

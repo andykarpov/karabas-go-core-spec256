@@ -117,6 +117,8 @@ signal cpu_int_n     : std_logic := '1';
 signal cpu_m1_n      : std_logic;
 signal cpu_nmi_n     : std_logic;
 signal cpu_ena       : std_logic;
+signal cpu_clken     : std_logic;
+signal regs_wr_d     : std_logic := '0';
 signal cpu_do        : std_logic_vector(7 downto 0);
 signal cpu_di        : std_logic_vector(7 downto 0);
 signal cpu_gfx_do    : std_logic_vector(63 downto 0);
@@ -212,6 +214,36 @@ signal s_hide_same   : std_logic := '1';
 signal s_up_mixed    : std_logic_vector(7 downto 0) := x"40";
 signal s_down_mixed  : std_logic_vector(7 downto 0) := x"00";
 signal kb_colour_mode: std_logic_vector(1 downto 0);
+-- the backgrounds (SDRAM, docs/SIMD.md section 7)
+signal s_bk_over_ff  : std_logic := '0';
+signal bg_count      : std_logic_vector(7 downto 0) := (others => '0');
+signal bg_on         : std_logic := '0';
+signal bg_cur        : std_logic_vector(7 downto 0) := (others => '0');
+signal bg_first      : std_logic_vector(7 downto 0) := (others => '0');
+signal bg_mask       : std_logic_vector(15 downto 0) := (others => '0');
+signal bg_base       : std_logic_vector(31 downto 0) := (others => '0');  -- offset of the backgrounds in the extension
+signal bg_wr         : std_logic := '0';
+signal bg_wr_a       : std_logic_vector(23 downto 0) := (others => '0');
+signal bg_wr_d       : std_logic_vector(7 downto 0) := (others => '0');
+signal bg_wr_n       : std_logic_vector(7 downto 0) := (others => '0');
+signal bg_wr_off     : std_logic_vector(15 downto 0) := (others => '0');
+type rule8_t is array (0 to 15) of std_logic_vector(7 downto 0);
+type rule16_t is array (0 to 15) of std_logic_vector(15 downto 0);
+signal rule_bg       : rule8_t := (others => x"FF");
+signal rule_val      : rule8_t := (others => x"00");
+signal rule_addr     : rule16_t := (others => x"0000");
+signal rule_m        : std_logic_vector(15 downto 0) := (others => '0');
+signal vga_bg_req    : std_logic;
+signal vga_bg_y      : std_logic_vector(7 downto 0);
+signal bg_req_s      : std_logic_vector(2 downto 0) := "000";
+signal bg_line_req   : std_logic := '0';
+signal bg_line_y     : std_logic_vector(7 downto 0) := (others => '0');
+signal bg_line_addr  : std_logic_vector(23 downto 0);
+signal tbl_pages     : std_logic_vector(23 downto 0) := (others => '0');  -- pages of the tables of reversed bytes
+signal sdram_ready   : std_logic;
+signal lb_we         : std_logic;
+signal lb_a          : std_logic_vector(7 downto 0);
+signal lb_d          : std_logic_vector(15 downto 0);
 signal softsw_command: std_logic_vector(15 downto 0);
 signal osd_command   : std_logic_vector(15 downto 0);
 signal osd_command_s1, osd_command_s2, osd_command_vga : std_logic_vector(15 downto 0) := (others => '0');
@@ -298,7 +330,7 @@ generic map (
 port map (
     RESET_n             => cpu_reset_n,
     CLK_n               => clk_sdram,
-    CLKEN               => cpu_ena,
+    CLKEN               => cpu_clken,
     WAIT_n              => '1',
     INT_n               => cpu_int_n,
     NMI_n               => cpu_nmi_n,
@@ -349,6 +381,14 @@ port map (
     I_HIDE_SAME         => s_hide_same,
     I_UP_MIXED          => s_up_mixed,
     I_DOWN_MIXED        => s_down_mixed,
+    I_BG_ON             => bg_on,
+    I_BK_OVER_FF        => s_bk_over_ff,
+    I_LB_CLK            => clk_sdram,
+    I_LB_WE             => lb_we,
+    I_LB_A              => lb_a,
+    I_LB_D              => lb_d,
+    O_BG_REQ            => vga_bg_req,
+    O_BG_Y              => vga_bg_y,
     O_ADDR              => vga_addr,
     O_GFX_ADDR          => vga_gfx_addr,
     O_R                 => vga_r,
@@ -369,13 +409,67 @@ port map (
     O_VSYNC             => sync_vsync);
 
 -- ram     
-DRAM_NRAS <= '1';
-DRAM_NCAS <= '1';
-DRAM_NWE    <= '1';
-DRAM_DQM <= "11";
-DRAM_BA <= "11";
-DRAM_A <= (others => '0');
-DRAM_DQ <= (others => 'Z');
+-- SDRAM: the backgrounds of the game, written by the file loader, read a line ahead for the video
+U15: entity work.sdram_bg
+port map (
+    clk                 => clk_sdram,
+    reset               => areset,
+    wr                  => bg_wr,
+    wr_addr             => bg_wr_a,
+    wr_data             => bg_wr_d,
+    line_req            => bg_line_req,
+    line_addr           => bg_line_addr,
+    line_sel            => bg_line_y(0),
+    lb_we               => lb_we,
+    lb_addr             => lb_a,
+    lb_data             => lb_d,
+    ready               => sdram_ready,
+    sdr_a               => DRAM_A,
+    sdr_ba              => DRAM_BA,
+    sdr_dq              => DRAM_DQ,
+    sdr_dqm             => DRAM_DQM,
+    sdr_ras_n           => DRAM_NRAS,
+    sdr_cas_n           => DRAM_NCAS,
+    sdr_we_n            => DRAM_NWE
+);
+
+bg_line_addr <= bg_cur & bg_line_y & x"00";
+
+-- the line asked for by the video (a toggle on clk_vga, the line number stable with it): two flip-flops
+-- on clk_bus, a request on the change; none while a file loads (the SDRAM is written then)
+process (clk_sdram)
+begin
+    if rising_edge(clk_sdram) then
+        bg_req_s <= bg_req_s(1 downto 0) & vga_bg_req;
+        bg_line_req <= '0';
+        if bg_req_s(2) /= bg_req_s(1) then
+            bg_line_y <= vga_bg_y;
+            bg_line_req <= bg_on and not fileloader_act;
+        end if;
+    end if;
+end process;
+
+-- the background shown: the first rule whose byte matches (watched on the writes of the CPU and of the
+-- loader), else the one before
+process (clk_sdram)
+begin
+    if rising_edge(clk_sdram) then
+        for i in 0 to 15 loop
+            if fileloader_act = '0' and cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr = rule_addr(i) then
+                if cpu_do = rule_val(i) then rule_m(i) <= '1'; else rule_m(i) <= '0'; end if;
+            end if;
+        end loop;
+        for i in 15 downto 0 loop
+            if rule_m(i) = '1' and rule_bg(i) /= x"FF" then
+                bg_cur <= rule_bg(i);
+            end if;
+        end loop;
+        if fileloader_act = '1' then
+            bg_cur <= bg_first;
+            rule_m <= bg_mask;
+        end if;
+    end if;
+end process;
      
 U5: entity work.sram
 port map (
@@ -386,6 +480,7 @@ port map (
     rd                  => sdram_rd,
     lane_a              => lane_a,
     lane_en             => lane_en,
+    lane_pages          => tbl_pages,
     a                   => sdram_addr(15 downto 0),
     di                  => sdram_di,
     do                  => sdram_do,
@@ -616,6 +711,16 @@ begin
     end if;
 end process;
 
+-- no CPU clock in the clock after the snapshot registers are loaded (DIRSet): every register of the CPU
+-- then changes at most every 2 clocks, the multicycle constraint TS_CPU of the ucf
+process (clk_sdram)
+begin
+    if rising_edge(clk_sdram) then
+        regs_wr_d <= regs_wr;
+    end if;
+end process;
+cpu_clken      <= cpu_ena and not regs_wr_d;
+
 reset          <= areset or kb_reset;                        -- горячий сброс
 cpu_reset_n    <= not(reset) and not(mcu_busy) and not(romloader_act) and not(fileloader_act); -- CPU сброс
 inta_n         <= cpu_iorq_n or cpu_m1_n;              -- inta_n
@@ -785,6 +890,7 @@ begin
          fileloader_wr64 <= '0';
          fileloader_wr8 <= '0';
          pal_wr <= '0';
+         bg_wr <= '0';
          
          prev_fileloader_act <= fileloader_act;
          if (fileloader_act = '1' and prev_fileloader_act = '0') then -- start of file loader
@@ -802,6 +908,15 @@ begin
             s_hide_same <= '1';
             s_up_mixed <= x"40";
             s_down_mixed <= x"00";
+            s_bk_over_ff <= '0';
+            bg_on <= '0';
+            bg_count <= (others => '0');
+            bg_first <= (others => '0');
+            bg_mask <= (others => '0');
+            tbl_pages <= (others => '0');
+            bg_wr_n <= (others => '0');
+            bg_wr_off <= (others => '0');
+            rule_bg <= (others => x"FF");
          end if;
          if (fileloader_act = '0' and prev_fileloader_act = '1') then -- end of file loader
             regs_wr <= '0';
@@ -857,13 +972,28 @@ begin
                     when 5 => ext_hdr(7 downto 0) <= fileloader_do;
                     when 6 => ext_hdr(15 downto 8) <= fileloader_do;
                     when 7 => ext_hdr(23 downto 16) <= fileloader_do;
+                    when 8 => bg_count <= fileloader_do;
+                    when 10 => bg_first <= fileloader_do;
+                    when 11 => bg_mask(7 downto 0) <= fileloader_do;
+                    when 12 => bg_mask(15 downto 8) <= fileloader_do;
+                    when 13 => tbl_pages(7 downto 0) <= fileloader_do;
+                    when 14 => tbl_pages(15 downto 8) <= fileloader_do;
                     when 15 =>
+                        tbl_pages(23 downto 16) <= fileloader_do;
                         if ext_magic = '1' then
                             rom_gfx <= ext_hdr(0);
                             s_paper00inkff <= ext_hdr(1);
                             s_hide_same <= ext_hdr(2);
                             s_up_mixed <= ext_hdr(15 downto 8);
                             s_down_mixed <= ext_hdr(23 downto 16);
+                            s_bk_over_ff <= ext_hdr(3);
+                            bg_on <= '0';
+                            if bg_count /= x"00" then bg_on <= sdram_ready; end if;
+                            if ext_hdr(0) = '1' then
+                                bg_base <= std_logic_vector(to_unsigned(848 + 131072, 32));
+                            else
+                                bg_base <= std_logic_vector(to_unsigned(848, 32));
+                            end if;
                         end if;
                     when others => null;
                 end case;
@@ -881,6 +1011,30 @@ begin
                             pal_wr <= '1';
                             pal_byte <= 0;
                     end case;
+                end if;
+
+            -- the rules of the backgrounds: background, address (low, high), value
+            elsif t < 848 then
+                if ext_magic = '1' then
+                    case t(1 downto 0) is   -- 784 is a multiple of 4
+                        when "00" => rule_bg(to_integer(unsigned(t(5 downto 2)) - 4) mod 16) <= fileloader_do;
+                        when "01" => rule_addr(to_integer(unsigned(t(5 downto 2)) - 4) mod 16)(7 downto 0) <= fileloader_do;
+                        when "10" => rule_addr(to_integer(unsigned(t(5 downto 2)) - 4) mod 16)(15 downto 8) <= fileloader_do;
+                        when others => rule_val(to_integer(unsigned(t(5 downto 2)) - 4) mod 16) <= fileloader_do;
+                    end case;
+                end if;
+
+            -- the backgrounds: 49152 bytes each, into the SDRAM at n * 65536 + y * 256 + x
+            elsif t >= bg_base and ext_magic = '1' and bg_wr_n < bg_count then
+                fileloader_rom <= '0';
+                bg_wr <= '1';
+                bg_wr_a <= bg_wr_n & bg_wr_off;
+                bg_wr_d <= fileloader_do;
+                if bg_wr_off = 49151 then
+                    bg_wr_off <= (others => '0');
+                    bg_wr_n <= bg_wr_n + 1;
+                else
+                    bg_wr_off <= bg_wr_off + 1;
                 end if;
 
             -- the ROM planes (.GFB): 8 bytes per address 0000-3FFF, as the planes of the RAM
@@ -935,7 +1089,10 @@ begin
         when others => d := (others => '1');
     end case;
     cpu_di <= d;
-    if (selector = "001" or (selector = "000" and rom_gfx = '1')) and not (GFX_INST_FROM_MAIN and cpu_inst = '1') then
+    -- the ROM planes of the game where they are not all 0 (a .GFB colours a part of the ROM, the font;
+    -- the rest of the file is 0: the ROM itself)
+    if (selector = "001" or (selector = "000" and rom_gfx = '1' and sdram_do(71 downto 8) /= x"0000000000000000")) and
+       not (GFX_INST_FROM_MAIN and cpu_inst = '1') then
         cpu_gfx_di <= sdram_do(71 downto 8);
     else
         cpu_gfx_di <= d & d & d & d & d & d & d & d;

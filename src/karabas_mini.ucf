@@ -223,7 +223,7 @@ NET "FLASH_HOLD_N"  LOC="P12"  | IOSTANDARD = LVCMOS33; # CONF_IO3
 # Clocks, all from one PLL on CLK_50MHZ (VCO 675 MHz, spec256.vhd), phase 0:
 #   CLKOUT0 56.25 MHz clk_bus: the CPU (T80se_S256, CLKEN 3.5 MHz), the SRAM controller, the MCU link, the
 #                     soft switches, the loaders, the VRAM write ports
-#   CLKOUT1 56.25 MHz at 180 degrees: the ODDR2 of SDR_CLK (the SDRAM is not used)
+#   CLKOUT1 56.25 MHz at 180 degrees: the ODDR2 of SDR_CLK (the SDRAM of the backgrounds, sdram_bg.v)
 #   CLKOUT2 25.00 MHz clk_vga: sync, vga_spec256, the OSD, the VRAM read ports; hdmi_pll (DCM_SP) makes the
 #                     pixel clock (CLK0, phase aligned) and the 5x serial clocks from it
 # The PERIOD of CLK_50MHZ is derived onto every PLL and DCM output.
@@ -232,6 +232,12 @@ TIMESPEC "TS_CLK_50MHZ" = PERIOD "CLK_50MHZ" 20 ns HIGH 50%;
 
 NET "clk_bus" TNM_NET = "TG_CLK_BUS";
 NET "clk_vga" TNM_NET = "TG_CLK_VGA";
+
+# The CPU (T80se_S256 and its 8 lanes): every register changes only on CLKEN = cpu_ena of sram.v (one clock
+# in 16) or on DIRSet (the snapshot registers; the clock after it has no CLKEN, spec256.vhd): the paths from
+# the CPU to the CPU have 2 clocks. (NMI_s / OldNMI_n of T80_S256 follow NMI_n every clock: one LUT.)
+INST "U1/U2/*" TNM = "TG_CPU";
+TIMESPEC "TS_CPU" = FROM "TG_CPU" TO "TG_CPU" 35.5 ns;
 NET "U2/clk_pix" TNM_NET = "TG_CLK_PIX";
 
 # MCU link (kg_mcu): SPI mode 0 from the RP2040 at 16 MHz, no faster bursts (BURST_MAX_MHZ 0:

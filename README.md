@@ -24,9 +24,13 @@ are built the same way but not tested on their boards yet.
 
 ## What it does
 
-- **Spec256 graphics:** the game RAM and its 8 bitplanes, the standard Spec256 palette (that of the
-  GZX emulator). Colour 0xFF shows the ordinary Spectrum pixel (INK / PAPER of the attributes,
-  with FLASH and BRIGHT), as in the original.
+- **Spec256 graphics:** the game RAM and its 8 bitplanes, the palette of the game (`.PAL`) or the
+  standard Spec256 palette (that of the GZX emulator), the ROM graphics of the game (`.GFB`).
+  Colours 0 and 0xFF follow the rules of the ZX-Poly emulator (the `.CFG` of the game: the PAPER /
+  INK of the attributes, colours mixed with the attribute colour); **Colour 0/FF** in the OSD can
+  change that.
+- **Background pictures** (`.B00`...): colour 0 shows the picture, chosen by the rules of the
+  `.CFG` as the game runs; they are kept in the SDRAM of the board.
 - **GFX 256** in the OSD switches between the 256-colour picture and the ordinary Spectrum picture
   at any time.
 - **Computer:** a Spectrum 48K, Z80 at 3.5 MHz, the 48K ROM. The frame interrupt comes from the
@@ -39,12 +43,7 @@ are built the same way but not tested on their boards yet.
 
 Not there yet:
 
-- **Background pictures** (the `.B00`... files of some games, which replace colour 0 with a
-  picture).
-- **Palettes of their own** (`.PAL`) of some games: all games use the standard palette.
-- **The ROM graphics** of the few games that have their own (Chuckie Egg, Ruff and Reddy): the
-  ROM planes are a copy of the ROM.
-- The 128K Spec256 extensions, tape, saving the game.
+- The 128K Spec256 extensions (`.GF0`...`.GF7`, `.GFA`), tape, saving the game.
 
 ## Getting started
 
@@ -67,6 +66,7 @@ Not there yet:
 | Joystick L | Kempston / Sinclair1 / Sinclair2 / Cursor / QAOPM / QAOPS | Menu+J |
 | Joystick R | the same | Menu+R |
 | GFX 256 | Off / On: the ordinary or the 256-colour picture | Menu+V |
+| Colour 0/FF | Auto: as the `.CFG` of the game; Attr: colour 0 is PAPER, 0xFF is INK; Palette: both from the palette; Pixel: 0xFF is the ordinary Spectrum pixel | Menu+C |
 | AY mode | ABC / ACB / Mono | Menu+A |
 | Pause | Off / On | Menu+P |
 | NMI | the NMI of the Z80 | Menu+F12 |
@@ -91,11 +91,15 @@ is a link to it):
 python3 spec256.py EXOLON.SNA
 ```
 
-It reads `EXOLON.SNA` and `EXOLON.GFX` next to it (the extension `.GFX` in capitals) and writes
-`EXOLON.256`. The other files of a pack (`.PAL`, `.B00`...) are not used yet.
+It reads `EXOLON.SNA` and `EXOLON.GFX` next to it and writes `EXOLON.256`; the other files of the
+pack with the same name are added when they are there: `.PAL` (the palette), `.CFG` (the colour
+rules and the rules of the backgrounds), `.GFB` (the ROM graphics), `.B00`...`.B99` (the
+backgrounds). The case of the names does not matter. `--plain` writes the old format without them.
 
 The `.256` file: the 48K of the snapshot RAM, then for every address the 8 bitplanes (bit k of
-plane p is bit p of the colour of pixel k), then the registers of the snapshot, 442396 bytes.
+plane p is bit p of the colour of pixel k), then the registers of the snapshot, 442396 bytes; then
+the extension `K256` (settings, palette, rules, ROM graphics, backgrounds 256×192), described in
+`docs/SIMD.md` section 7.
 
 ## Building
 
