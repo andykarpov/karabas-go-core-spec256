@@ -66,3 +66,6 @@ xst/
 _ngo/
 _xmsgs/
 
+
+# ghdl work library of src/sim
+src/sim/work/
