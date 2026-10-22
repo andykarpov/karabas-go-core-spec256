@@ -31,6 +31,7 @@ entity tb_s256 is
 		G_IMM_MASTER : boolean := true;   -- operands of the instruction stream from the main memory
 		G_CYCLES     : integer := 1000000;
 		G_TABLE      : boolean := false;  -- the lane address test of gen_table.py
+		G_LOG_GA     : boolean := false;  -- print the reads where a lane has an address of its own
 		G_TRACE      : string  := "";
 		G_MAX_REPORT : integer := 20
 	);
@@ -126,6 +127,8 @@ begin
 		variable planes : planes_t;
 		variable regs : std_logic_vector(223 downto 0) := (others => '0');
 		variable n, a, la : integer;
+		variable natural : boolean;
+		variable uni_ok : boolean := false;
 		variable io : std_logic_vector(7 downto 0);
 
 		function io_read(addr : std_logic_vector(15 downto 0)) return std_logic_vector is
@@ -207,8 +210,29 @@ begin
 				d_di <= dut_mem(a);
 				for p in 0 to LANES-1 loop
 					la := a;
-					if d_ga_en = '1' then
+					-- as sram.v: the lane address in the same page, the word at a not coloured, the
+					-- lane addresses not all the same
+					natural := true;
+					for q in 0 to LANES-1 loop
+						if planes(q)(a) /= dut_mem(a) then natural := false; end if;
+						if d_ga(q*16+15 downto q*16) /= d_ga(15 downto 0) then uni_ok := true; end if;
+					end loop;
+					if not uni_ok then natural := false; end if;
+					uni_ok := false;
+					if d_ga_en = '1' and natural and d_ga(p*16+15 downto p*16+8) = d_a(15 downto 8) then
 						la := to_integer(unsigned(d_ga(p*16+15 downto p*16)));
+						if G_LOG_GA and la /= a and d_mreq_n = '0' and d_rd_n = '0' and p = 0 then
+							report "GA pc " & integer'image(to_integer(unsigned(d_reg(79 downto 64)))) &
+								" a " & integer'image(a) & " lanes " &
+								integer'image(to_integer(unsigned(d_ga(15 downto 0)))) & " " &
+								integer'image(to_integer(unsigned(d_ga(31 downto 16)))) & " " &
+								integer'image(to_integer(unsigned(d_ga(47 downto 32)))) & " " &
+								integer'image(to_integer(unsigned(d_ga(63 downto 48)))) & " " &
+								integer'image(to_integer(unsigned(d_ga(79 downto 64)))) & " " &
+								integer'image(to_integer(unsigned(d_ga(95 downto 80)))) & " " &
+								integer'image(to_integer(unsigned(d_ga(111 downto 96)))) & " " &
+								integer'image(to_integer(unsigned(d_ga(127 downto 112))));
+						end if;
 					end if;
 					if d_inst = '1' and G_IMM_MASTER then
 						d_gdi(p*8+7 downto p*8) <= dut_mem(a);
@@ -227,6 +251,7 @@ begin
 		variable l : line;
 		file tf : text;
 		variable prev_mc, prev_ts : std_logic_vector(2 downto 0) := "000";
+		variable prev_dd : boolean := false;
 
 		procedure err(msg : string) is
 			variable ln : line;
@@ -262,6 +287,16 @@ begin
 						err("lane " & integer'image(p) & " GDO " & hex(d_gdo(p*8+7 downto p*8)) & " /= DO " & hex(d_do));
 					end if;
 				end loop;
+			end if;
+			-- G_LOG_GA: where the D of lane 0 goes apart from the main D (REG bits 111..104 = D)
+			if G_LOG_GA and d_mc = "001" and d_ts = "010" and d_m1_n = '0' and
+			   d_greg(111 downto 104) /= d_reg(111 downto 104) and not prev_dd then
+				report "DDIFF pc " & integer'image(to_integer(unsigned(d_a))) & " D " &
+					integer'image(to_integer(unsigned(d_reg(111 downto 104)))) & " lane0 D " &
+					integer'image(to_integer(unsigned(d_greg(111 downto 104))));
+			end if;
+			if d_mc = "001" and d_ts = "010" and d_m1_n = '0' then
+				prev_dd := d_greg(111 downto 104) /= d_reg(111 downto 104);
 			end if;
 			-- trace: entering T2 of an M1; INT marks the M1 of an interrupt acknowledge
 			if G_TRACE /= "" and d_mc = "001" and d_ts = "010" and not (prev_mc = "001" and prev_ts = "010") then

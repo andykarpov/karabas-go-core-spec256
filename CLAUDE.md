@@ -22,6 +22,7 @@ Convert a game (`NAME.SNA` + `NAME.GFX` side by side): `python3 src/games/spec25
 - `run_s256_sim.sh [cycles]` (ghdl): `tb_s256.vhd` runs `T80se` and `T80se_S256` on the games and on random code (`gen_random.py`); every clock the main CPU is compared with T80se and, with the planes equal to the SNA RAM, every lane with the main CPU. About 2 minutes at 200000 clocks. `GAMES=`, `SEEDS=` pick a subset.
 - `tb_vga.vhd` (ghdl, see its header): the 0xFF passthrough of `vga_spec256` against the ordinary mode.
 - `tb_hid.vhd` (ghdl, see its header): `hid_parser`, USB report keys to the ZX matrix.
+- `tb_sram.v` (iverilog, see its header): the lane reads of `sram.v` (a lane reads at its own address only for a table lookup: same page, word at the main address not coloured).
 - `run_load_sim.sh [GAME]` (ISim): `tb_load.vhd`, the ROM and a `.256` through `kg_mcu` in 32 MHz bursts into a model of the SRAM; checks every byte and the start of the CPU with the registers of the snapshot.
 - A test counts only if it fails when the code it covers is broken: check new tests with a mutation in a scratch copy.
 
