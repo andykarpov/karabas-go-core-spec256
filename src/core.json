@@ -18,6 +18,7 @@
         {"type": "S", "name": "Joystick L", "options": ["Kempston", "Sinclair1", "Sinclair2", "Cursor", "QAOPM", "QAOPS"], "default": 0, "hotkey": "Menu+J"},
         {"type": "S", "name": "Joystick R", "options": ["Kempston", "Sinclair1", "Sinclair2", "Cursor", "QAOPM", "QAOPS"], "default": 1, "hotkey": "Menu+R"},
         {"type": "S", "name": "GFX 256", "options": ["Off", "On"], "default": 1, "hotkey": "Menu+V"},
+        {"type": "S", "name": "AY mode", "options": ["ABC", "ACB", "Mono"], "default": 0, "hotkey": "Menu+A"},
         {"type": "N", "name": "Pause", "options": ["Off", "On"], "default": 0, "hotkey": "Menu+P"},
         {"type": "T", "name": "NMI", "hotkey": "Menu+F12"},
         {"type": "T", "name": "Reset", "hotkey": "Ctrl+Alt+Del"}

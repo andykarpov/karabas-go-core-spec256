@@ -138,6 +138,25 @@ signal port_xxfe_reg : std_logic_vector(7 downto 0);
 signal kb_do         : std_logic_vector(4 downto 0);
 signal joy_do        : std_logic_vector(7 downto 0);
 
+-- Sound: AY-3-8910 at 1.7734 MHz (as the 128K), the mixer, the level meters of the mcu
+constant CLK_BUS_HZ  : integer := 56250000;
+constant AY_HZ       : integer := 1773400;
+signal ay_acc        : integer range 0 to CLK_BUS_HZ - 1 := 0;
+signal ay_ce         : std_logic := '0';
+signal ay_bdir       : std_logic;
+signal ay_bc         : std_logic;
+signal ay_do         : std_logic_vector(7 downto 0);
+signal ay_a          : std_logic_vector(7 downto 0);
+signal ay_b          : std_logic_vector(7 downto 0);
+signal ay_c          : std_logic_vector(7 downto 0);
+signal kb_ay_mode    : std_logic_vector(1 downto 0);
+signal mix_l         : unsigned(10 downto 0) := (others => '0');
+signal mix_r         : unsigned(10 downto 0) := (others => '0');
+signal audio_mix_l   : std_logic_vector(15 downto 0);
+signal audio_mix_r   : std_logic_vector(15 downto 0);
+signal matrix_cmd    : std_logic_vector(23 downto 0);
+signal matrix_cmd_wr : std_logic;
+
 -- MCU
 signal hid_kb_status : std_logic_vector(7 downto 0);
 signal hid_kb_dat0   : std_logic_vector(7 downto 0);
@@ -173,7 +192,7 @@ signal regs_wr       : std_logic := '0';
 signal softsw_command: std_logic_vector(15 downto 0);
 signal osd_command   : std_logic_vector(15 downto 0);
 signal osd_command_s1, osd_command_s2, osd_command_vga : std_logic_vector(15 downto 0) := (others => '0');
-signal softsw_regs   : std_logic_vector(10*8-1 downto 0);
+signal softsw_regs   : std_logic_vector(11*8-1 downto 0);
 signal vga_rgb_core  : std_logic_vector(23 downto 0);
 signal kb_nmi        : std_logic := '0';
 signal kb_reset      : std_logic := '0';
@@ -385,7 +404,7 @@ generic map (
     CS_FILTER           => 3,
     ENABLE_RTC          => 0,
     ENABLE_UART         => 0,
-    ENABLE_MATRIX       => 0,
+    ENABLE_MATRIX       => 1,
     ENABLE_DEBUG        => 0,
     ENABLE_IMG          => 0,
     ENABLE_FILE         => 1,
@@ -448,8 +467,8 @@ port map (
     FT_MISO             => '1',
     SD2_MISO            => '1',
 
-    MATRIX_CMD          => x"000000",
-    MATRIX_CMD_WR       => '0',
+    MATRIX_CMD          => matrix_cmd,
+    MATRIX_CMD_WR       => matrix_cmd_wr,
     DEBUG_ADDR          => x"0000",
     DEBUG_DATA          => x"0000",
     IMG_Q_WR            => '0',
@@ -495,7 +514,7 @@ port map (
 -- core json (core.json, core_mini.json and core_minig.json have the same items)
 U11: entity work.kg_soft_switches
 generic map (
-    N                   => 10
+    N                   => 11
 )
 port map (
     clk                 => clk_sdram,
@@ -506,9 +525,10 @@ port map (
 kb_joy_type_l <= softsw_regs(4*8+2 downto 4*8);    -- Joystick L
 kb_joy_type_r <= softsw_regs(5*8+2 downto 5*8);    -- Joystick R
 kb_video_mode <= softsw_regs(6*8);                 -- GFX 256
-kb_pause      <= softsw_regs(7*8);                 -- Pause
-kb_nmi        <= softsw_regs(8*8);                 -- NMI
-kb_reset      <= softsw_regs(9*8);                 -- Reset
+kb_ay_mode    <= softsw_regs(7*8+1 downto 7*8);    -- AY mode: ABC, ACB, Mono
+kb_pause      <= softsw_regs(8*8);                 -- Pause
+kb_nmi        <= softsw_regs(9*8);                 -- NMI
+kb_reset      <= softsw_regs(10*8);                -- Reset
 
 -- OSD (karabas-go-modules kg_osd_overlay) on the VGA clock. OSD_COMMAND comes from the clock of the mcu
 -- link: taken when two samples in a row are the same, so a word caught while it changes is not a command.
@@ -612,8 +632,89 @@ sdram_addr        <= "000000" & romloader_a(15 downto 0) when romloader_act = '1
                      "000000" & fileloader_a64 when fileloader_act = '1' and fileloader_gfx = '1' else
                      "000000" & cpu_addr;
 
-AUDIO_L        <= "0000" & port_xxfe_reg(4) & "00000000000";
-AUDIO_R        <= "0000" & port_xxfe_reg(4) & "00000000000";
+-------------------------------------------------------------------------------
+-- AY-3-8910 (ym2149 of MikeJ / Sorgelig, MODE 1: the AY volume table) on the ports of the 128K:
+-- #FFFD (A15, A14, not A1) the register number, read the register; #BFFD (A15, not A14, not A1)
+-- write the register. The clock: a strobe of 1.7734 MHz from a fractional counter, SEL 0 (no
+-- division by 2).
+process (clk_sdram)
+begin
+    if rising_edge(clk_sdram) then
+        if ay_acc + AY_HZ >= CLK_BUS_HZ then
+            ay_acc <= ay_acc + AY_HZ - CLK_BUS_HZ;
+            ay_ce <= '1';
+        else
+            ay_acc <= ay_acc + AY_HZ;
+            ay_ce <= '0';
+        end if;
+    end if;
+end process;
+
+ay_bdir <= '1' when cpu_iorq_n = '0' and cpu_m1_n = '1' and cpu_wr_n = '0' and cpu_addr(15) = '1' and cpu_addr(1) = '0' else '0';
+ay_bc   <= '1' when cpu_iorq_n = '0' and cpu_m1_n = '1' and cpu_addr(15 downto 14) = "11" and cpu_addr(1) = '0' else '0';
+
+U13: entity work.ym2149
+port map (
+    CLK                 => clk_sdram,
+    CE                  => ay_ce,
+    RESET               => reset,
+    BDIR                => ay_bdir,
+    BC                  => ay_bc,
+    DI                  => cpu_do,
+    DO                  => ay_do,
+    CHANNEL_A           => ay_a,
+    CHANNEL_B           => ay_b,
+    CHANNEL_C           => ay_c,
+    SEL                 => '0',
+    MODE                => '1',
+    ACTIVE              => open,
+    IOA_in              => x"FF",
+    IOA_out             => open,
+    IOB_in              => x"FF",
+    IOB_out             => open
+);
+
+-- Mixer: the AY (ABC: A and half of B left, C and half of B right; ACB: B and C swapped; mono:
+-- A + B + C both, each 0..765), the beeper (EAR, bit 4 of #FE: 384) and the MIC bit (bit 3: 96);
+-- 0..1245, shifted to 0..19920 of the signed 16 bits of the HDMI, the DAC and the level meters
+process (clk_sdram)
+    variable a, b, c, l, r : unsigned(10 downto 0);
+    variable beep : unsigned(10 downto 0);
+begin
+    if rising_edge(clk_sdram) then
+        a := "000" & unsigned(ay_a);
+        b := "000" & unsigned(ay_b);
+        c := "000" & unsigned(ay_c);
+        case kb_ay_mode is
+            when "00"   => l := a + a + b; r := c + c + b;   -- ABC
+            when "01"   => l := a + a + c; r := b + b + c;   -- ACB
+            when others => l := a + b + c; r := a + b + c;   -- mono
+        end case;
+        beep := (others => '0');
+        if port_xxfe_reg(4) = '1' then beep := beep + 384; end if;
+        if port_xxfe_reg(3) = '1' then beep := beep + 96; end if;
+        mix_l <= l + beep;
+        mix_r <= r + beep;
+    end if;
+end process;
+
+audio_mix_l    <= '0' & std_logic_vector(mix_l) & "0000";
+audio_mix_r    <= '0' & std_logic_vector(mix_r) & "0000";
+AUDIO_L        <= audio_mix_l;
+AUDIO_R        <= audio_mix_r;
+
+-- the level meters of the mcu (karabas-go-modules audio_peaks): 2^20 clocks = 18.6 ms
+U14: entity work.audio_peaks
+generic map (
+    PERIOD_BITS         => 20
+)
+port map (
+    clk                 => clk_sdram,
+    audio_l             => audio_mix_l,
+    audio_r             => audio_mix_r,
+    cmd_wr              => matrix_cmd_wr,
+    cmd                 => matrix_cmd
+);
 
 BEEPER         <= port_xxfe_reg(4);
 
@@ -702,7 +803,7 @@ end process;
 -- Шина данных CPU
 -- Линии (cpu_gfx_di, байт линии n в битах 8n+7..8n): из ROM - сам ROM, из RAM - своя плоскость,
 -- поток команд (cpu_inst) - байт основной памяти при GFX_INST_FROM_MAIN, из порта - то же, что CPU.
-process (selector, sdram_do, kb_do, joy_do, cpu_inst)
+process (selector, sdram_do, kb_do, joy_do, ay_do, cpu_inst)
     variable d : std_logic_vector(7 downto 0);
 begin
     case selector is
@@ -710,6 +811,7 @@ begin
         when "001" => d := sdram_do(7 downto 0);
         when "010" => d := "111" & kb_do;
         when "011" => d := joy_do;
+        when "100" => d := ay_do;
         when others => d := (others => '1');
     end case;
     cpu_di <= d;
@@ -725,6 +827,7 @@ selector <=
     "001" when cpu_mreq_n = '0' and cpu_rd_n = '0' and cpu_addr(15 downto 14) /= "00"else   -- SDRAM RAM
     "010" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_addr(7 downto 0) = X"FE" else    -- Клавиатура, порт xxFE
     "011" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_addr(7 downto 0) = X"1F" else    -- Joystick, порт xx1F
+    "100" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_m1_n = '1' and cpu_addr(15 downto 14) = "11" and cpu_addr(1) = '0' else -- AY, порт #FFFD
     (others => '1');
     
 end rtl;
