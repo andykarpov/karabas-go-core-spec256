@@ -135,6 +135,11 @@ entity T80_S256 is
 		GDI        : in  std_logic_vector(LANES*8-1 downto 0) := (others => '0'); -- lane data in, as DI
 		GDO        : out std_logic_vector(LANES*8-1 downto 0);     -- lane data out, as DO
 		GREG       : out std_logic_vector(LANES*212-1 downto 0);   -- lane registers in the layout of REG
+		-- karabas: the address of each lane for a data access through HL, DE or BC (GA_EN = 1): the
+		-- register pair of the lane (a table lookup with a byte of the lane in L reads the entry of
+		-- that byte, as the shadow CPUs of ZX-Poly); otherwise the lanes use A
+		GA         : out std_logic_vector(LANES*16-1 downto 0);
+		GA_EN      : out std_logic;
 		DIRSet     : in  std_logic := '0';
 		DIR        : in  std_logic_vector(211 downto 0) := (others => '0') -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
 	);
@@ -273,6 +278,9 @@ architecture rtl of T80_S256 is
 	signal No_PC                : std_logic;
 	signal DOR                  : std_logic_vector(127 downto 0);
 	signal Inst_r               : std_logic;  -- karabas: A is taken from PC
+	signal ARegC_r              : std_logic := '0';  -- karabas: A is a data register pair (HL, DE, BC)
+	signal lanes_RegBusC        : std_logic_vector(LANES*16-1 downto 0);  -- karabas: that pair of each lane
+	signal GA_r                 : std_logic_vector(LANES*16-1 downto 0);
 
 begin
 
@@ -407,6 +415,7 @@ begin
 			PC <= (others => '0');  -- Program Counter
 			A <= (others => '0');
 			Inst_r <= '1';
+			ARegC_r <= '0';
 			WZ <= (others => '0');
 			IR <= "00000000";
 			ISet <= "00";
@@ -452,6 +461,7 @@ begin
 				PC  <= unsigned(DIR(79 downto 64));
 				A <= DIR(79 downto 64);
 				Inst_r <= '1';
+				ARegC_r <= '0';
 				IStatus <= DIR(209 downto 208);
 
 			elsif ClkEn = '1' then
@@ -501,6 +511,7 @@ begin
 							A(7 downto 0) <= std_logic_vector(R);
 							A(15 downto 8) <= I;
 							Inst_r <= '0';
+							ARegC_r <= '0';
 							R(6 downto 0) <= R(6 downto 0) + 1;
 						end if;
 
@@ -558,25 +569,30 @@ begin
 							A(15 downto 8) <= DI_Reg;
 							A(7 downto 0) <= WZ(7 downto 0);
 							Inst_r <= '1';
+							ARegC_r <= '0';
 							PC(15 downto 8) <= unsigned(DI_Reg);
 							PC(7 downto 0) <= unsigned(WZ(7 downto 0));
 						elsif JumpXY = '1' then
 							A <= RegBusC;
 							Inst_r <= '1';
+							ARegC_r <= '0';
 							PC <= unsigned(RegBusC);
 						elsif Call = '1' or RstP = '1' then
 							A <= WZ;
 							Inst_r <= '1';
+							ARegC_r <= '0';
 							PC <= unsigned(WZ);
 						elsif MCycle = MCycles and NMICycle = '1' then
 							A <= "0000000001100110";
 							Inst_r <= '1';
+							ARegC_r <= '0';
 							PC <= "0000000001100110";
 						elsif ((Mode /= 3 and MCycle = "011") or (Mode = 3 and MCycle = "100"))
 							and IntCycle = '1' and IStatus = "10" then
 							A(15 downto 8) <= I;
 							A(7 downto 0) <= WZ(7 downto 0);
 							Inst_r <= '0';
+							ARegC_r <= '0';
 							PC(15 downto 8) <= unsigned(I);
 							PC(7 downto 0) <= unsigned(WZ(7 downto 0));
 						else
@@ -585,13 +601,17 @@ begin
 								if XY_State = "00" then
 									A <= RegBusC;
 									Inst_r <= '0';
+									ARegC_r <= '1';  -- karabas: lane addresses from their pairs
+									GA_r <= lanes_RegBusC;
 								else
 									if NextIs_XY_Fetch = '1' then
 										A <= std_logic_vector(PC);
 										Inst_r <= '1';
+										ARegC_r <= '0';
 									else
 										A <= WZ;
 										Inst_r <= '0';
+										ARegC_r <= '0';
 									end if;
 								end if;
 							when aIOA =>
@@ -606,19 +626,24 @@ begin
 								end if;
 								A(7 downto 0) <= DI_Reg;
 								Inst_r <= '0';
+								ARegC_r <= '0';
 								WZ <= (ACC & DI_Reg) + "1";
 							when aSP =>
 								A <= std_logic_vector(SP);
 								Inst_r <= '0';
+								ARegC_r <= '0';
 							when aBC =>
 								if Mode = 3 and IORQ_i = '1' then
 									-- Memory map I/O on GBZ80
 									A(15 downto 8) <= (others => '1');
 									A(7 downto 0) <= RegBusC(7 downto 0);
 									Inst_r <= '0';
+									ARegC_r <= '0';
 								else
 									A <= RegBusC;
 									Inst_r <= '0';
+									ARegC_r <= '1';  -- karabas: lane addresses from their pairs
+									GA_r <= lanes_RegBusC;
 									if SetWZ = "01" then
 										WZ <= RegBusC + "1";
 									end if;
@@ -630,6 +655,8 @@ begin
 							when aDE =>
 								A <= RegBusC;
 								Inst_r <= '0';
+								ARegC_r <= '1';  -- karabas: lane addresses from their pairs
+								GA_r <= lanes_RegBusC;
 								if SetWZ = "10" then
 									WZ(7 downto 0) <= RegBusC(7 downto 0) + "1";
 									WZ(15 downto 8) <= ACC;
@@ -638,10 +665,12 @@ begin
 								if Inc_WZ = '1' then
 									A <= std_logic_vector(unsigned(WZ) + 1);
 									Inst_r <= '0';
+									ARegC_r <= '0';
 								else
 									A(15 downto 8) <= DI_Reg;
 									A(7 downto 0) <= WZ(7 downto 0);
 									Inst_r <= '0';
+									ARegC_r <= '0';
 									if SetWZ = "10" then
 										WZ(7 downto 0) <= WZ(7 downto 0) + "1";
 										WZ(15 downto 8) <= ACC;
@@ -652,9 +681,11 @@ begin
 									-- INIR, INDR, OTIR, OTDR
 									A <= RegBusA_r;
 									Inst_r <= '0';
+									ARegC_r <= '0';
 								elsif No_PC = '0' or No_BTR = '1' or (I_DJNZ = '1' and IncDecZ = '1') or Mode > 1 then
 									A <= std_logic_vector(PC);
 									Inst_r <= '1';
+									ARegC_r <= '0';
 								end if;
 							end case;
 						end if;
@@ -1379,6 +1410,8 @@ begin
 --
 ---------------------------------------------------------------------------
 	INST <= Inst_r;
+	GA <= GA_r;
+	GA_EN <= ARegC_r;
 
 	g_lane : for l in 0 to LANES - 1 generate
 		signal l_ACC, l_Ap         : std_logic_vector(7 downto 0);
@@ -1398,6 +1431,7 @@ begin
 		signal l_DOR               : std_logic_vector(127 downto 0);
 	begin
 		l_DI_Reg <= GDI(l*8+7 downto l*8);
+		lanes_RegBusC(l*16+15 downto l*16) <= l_RegBusC;
 		GDO(l*8+7 downto l*8) <= l_DO;
 
 		process (F, l_C)

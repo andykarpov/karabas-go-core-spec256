@@ -122,6 +122,10 @@ signal cpu_di        : std_logic_vector(7 downto 0);
 signal cpu_gfx_do    : std_logic_vector(63 downto 0);
 signal cpu_gfx_di    : std_logic_vector(63 downto 0);
 signal cpu_inst      : std_logic;  -- the address is the instruction stream
+signal cpu_ga        : std_logic_vector(127 downto 0);  -- the addresses of the lanes (T80_S256 GA)
+signal cpu_ga_en     : std_logic;
+signal lane_a        : std_logic_vector(127 downto 0);
+signal lane_en       : std_logic;
 
 -- Memory
 signal vram_wr       : std_logic;
@@ -143,6 +147,7 @@ constant CLK_BUS_HZ  : integer := 56250000;
 constant AY_HZ       : integer := 1773400;
 signal ay_acc        : integer range 0 to CLK_BUS_HZ - 1 := 0;
 signal ay_ce         : std_logic := '0';
+signal ay_reset      : std_logic;
 signal ay_bdir       : std_logic;
 signal ay_bc         : std_logic;
 signal ay_do         : std_logic_vector(7 downto 0);
@@ -189,10 +194,28 @@ signal fileloader_buf: std_logic_vector(63 downto 0);
 signal prev_fileloader_act : std_logic := '0';
 signal regs          : std_logic_vector(223 downto 0);
 signal regs_wr       : std_logic := '0';
+-- the extension of the .256 (docs/SIMD.md section 7): the header, the palette, the ROM planes
+constant EXT_BASE    : integer := 442396;
+signal ext_magic     : std_logic := '0';                        -- the header so far is "K256"
+signal ext_hdr       : std_logic_vector(23 downto 0) := (others => '0');  -- flags, UpColorsMixed, DownColorsMixed
+signal fileloader_rom: std_logic := '0';                        -- writing the ROM planes
+signal rom_gfx       : std_logic := '0';                        -- the game has ROM planes (.GFB)
+signal pal_wr        : std_logic := '0';
+signal pal_a         : std_logic_vector(7 downto 0) := (others => '0');
+signal pal_d         : std_logic_vector(23 downto 0);
+signal pal_rg        : std_logic_vector(15 downto 0);
+signal pal_byte      : integer range 0 to 2 := 0;
+signal pal_next      : std_logic_vector(7 downto 0) := (others => '0');
+-- the colour rules of the game: the defaults of ZX-Poly without a background until the file says
+signal s_paper00inkff: std_logic := '1';
+signal s_hide_same   : std_logic := '1';
+signal s_up_mixed    : std_logic_vector(7 downto 0) := x"40";
+signal s_down_mixed  : std_logic_vector(7 downto 0) := x"00";
+signal kb_colour_mode: std_logic_vector(1 downto 0);
 signal softsw_command: std_logic_vector(15 downto 0);
 signal osd_command   : std_logic_vector(15 downto 0);
 signal osd_command_s1, osd_command_s2, osd_command_vga : std_logic_vector(15 downto 0) := (others => '0');
-signal softsw_regs   : std_logic_vector(11*8-1 downto 0);
+signal softsw_regs   : std_logic_vector(12*8-1 downto 0);
 signal vga_rgb_core  : std_logic_vector(23 downto 0);
 signal kb_nmi        : std_logic := '0';
 signal kb_reset      : std_logic := '0';
@@ -301,7 +324,9 @@ port map (
     INST                => cpu_inst,
     GDI                 => cpu_gfx_di,
     GDO                 => cpu_gfx_do,
-    GREG                => open
+    GREG                => open,
+    GA                  => cpu_ga,
+    GA_EN               => cpu_ga_en
 );
 
 -- Video
@@ -315,6 +340,15 @@ port map (
     I_HCNT              => sync_hcnt,
     I_VCNT              => sync_vcnt,
     I_BLANK             => sync_blank,
+    I_PAL_CLK           => clk_sdram,
+    I_PAL_WR            => pal_wr,
+    I_PAL_A             => pal_a,
+    I_PAL_D             => pal_d,
+    I_COLOUR_MODE       => kb_colour_mode,
+    I_PAPER00INKFF      => s_paper00inkff,
+    I_HIDE_SAME         => s_hide_same,
+    I_UP_MIXED          => s_up_mixed,
+    I_DOWN_MIXED        => s_down_mixed,
     O_ADDR              => vga_addr,
     O_GFX_ADDR          => vga_gfx_addr,
     O_R                 => vga_r,
@@ -350,6 +384,8 @@ port map (
     wr                  => sdram_wr,
 	 wr_mask					=> sdram_wr_mask,
     rd                  => sdram_rd,
+    lane_a              => lane_a,
+    lane_en             => lane_en,
     a                   => sdram_addr(15 downto 0),
     di                  => sdram_di,
     do                  => sdram_do,
@@ -514,7 +550,7 @@ port map (
 -- core json (core.json, core_mini.json and core_minig.json have the same items)
 U11: entity work.kg_soft_switches
 generic map (
-    N                   => 11
+    N                   => 12
 )
 port map (
     clk                 => clk_sdram,
@@ -525,10 +561,11 @@ port map (
 kb_joy_type_l <= softsw_regs(4*8+2 downto 4*8);    -- Joystick L
 kb_joy_type_r <= softsw_regs(5*8+2 downto 5*8);    -- Joystick R
 kb_video_mode <= softsw_regs(6*8);                 -- GFX 256
-kb_ay_mode    <= softsw_regs(7*8+1 downto 7*8);    -- AY mode: ABC, ACB, Mono
-kb_pause      <= softsw_regs(8*8);                 -- Pause
-kb_nmi        <= softsw_regs(9*8);                 -- NMI
-kb_reset      <= softsw_regs(10*8);                -- Reset
+kb_colour_mode<= softsw_regs(7*8+1 downto 7*8);    -- Colour 0/FF: Auto, Attr, Palette, Pixel
+kb_ay_mode    <= softsw_regs(8*8+1 downto 8*8);    -- AY mode: ABC, ACB, Mono
+kb_pause      <= softsw_regs(9*8);                 -- Pause
+kb_nmi        <= softsw_regs(10*8);                -- NMI
+kb_reset      <= softsw_regs(11*8);                -- Reset
 
 -- OSD (karabas-go-modules kg_osd_overlay) on the VGA clock. OSD_COMMAND comes from the clock of the mcu
 -- link: taken when two samples in a row are the same, so a word caught while it changes is not a command.
@@ -606,14 +643,21 @@ vram_gfx_addr   <= fileloader_a64(12 downto 0) when fileloader_act = '1' and fil
 
 sdram_wr        <= romloader_wr when romloader_act = '1' else
                    fileloader_wr8 when fileloader_act = '1' and fileloader_sna = '1' else
-                   fileloader_wr64 when fileloader_act = '1' and fileloader_gfx = '1' else
+                   fileloader_wr64 when fileloader_act = '1' and (fileloader_gfx = '1' or fileloader_rom = '1') else
                    '1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr(15 downto 14) /= "00") else 
                    '0';
 
 sdram_wr_mask   <= "000000001" when romloader_act = '1' else
                    "000000001" when fileloader_act = '1' and fileloader_sna = '1' else
-                   "111111110" when fileloader_act = '1' and fileloader_gfx = '1' else
+                   "111111110" when fileloader_act = '1' and (fileloader_gfx = '1' or fileloader_rom = '1') else
                    "111111111";
+
+-- the lanes read at their own address through HL, DE, BC (T80_S256 GA): in the RAM only, a lane address in
+-- the ROM stays at the address of the main CPU (the ROM has planes in the SRAM only with a .GFB)
+g_lane_a: for p in 0 to 7 generate
+    lane_a(p*16+15 downto p*16) <= cpu_ga(p*16+15 downto p*16) when cpu_ga(p*16+15 downto p*16+14) /= "00" else cpu_addr;
+end generate;
+lane_en         <= cpu_ga_en when cpu_addr(15 downto 14) /= "00" else '0';
 
 sdram_rd        <= '0' when romloader_act='1' or fileloader_act='1' else
                    '1' when cpu_mreq_n = '0' and cpu_rd_n = '0' else 
@@ -624,12 +668,12 @@ sdram_di(7 downto 0) <= romloader_do when romloader_act = '1' else
                         cpu_do;
 
 sdram_di(71 downto 8) <= x"0000000000000000" when romloader_act = '1' else
-                         fileloader_do64 when fileloader_act = '1' and fileloader_gfx = '1' else
+                         fileloader_do64 when fileloader_act = '1' and (fileloader_gfx = '1' or fileloader_rom = '1') else
                          cpu_gfx_do;
 
 sdram_addr        <= "000000" & romloader_a(15 downto 0) when romloader_act = '1' else
                      "000000" & fileloader_a8 when fileloader_act = '1' and fileloader_sna = '1' else
-                     "000000" & fileloader_a64 when fileloader_act = '1' and fileloader_gfx = '1' else
+                     "000000" & fileloader_a64 when fileloader_act = '1' and (fileloader_gfx = '1' or fileloader_rom = '1') else
                      "000000" & cpu_addr;
 
 -------------------------------------------------------------------------------
@@ -650,6 +694,9 @@ begin
     end if;
 end process;
 
+-- reset with the CPU: a new game (the file loader) silences the AY of the old one
+ay_reset <= reset or romloader_act or fileloader_act;
+
 ay_bdir <= '1' when cpu_iorq_n = '0' and cpu_m1_n = '1' and cpu_wr_n = '0' and cpu_addr(15) = '1' and cpu_addr(1) = '0' else '0';
 ay_bc   <= '1' when cpu_iorq_n = '0' and cpu_m1_n = '1' and cpu_addr(15 downto 14) = "11" and cpu_addr(1) = '0' else '0';
 
@@ -657,7 +704,7 @@ U13: entity work.ym2149
 port map (
     CLK                 => clk_sdram,
     CE                  => ay_ce,
-    RESET               => reset,
+    RESET               => ay_reset,
     BDIR                => ay_bdir,
     BC                  => ay_bc,
     DI                  => cpu_do,
@@ -727,27 +774,45 @@ VGA_BLANK      <= sync_blank;
 
 -------------------------------------------------------------------------------
 -- File loader (load game data into 8 cpus, load regs from snapshot)
+-- After the 442396 bytes the extension (docs/SIMD.md section 7, games/spec256.py): the header ("K256",
+-- version, flags, UpColorsMixed, DownColorsMixed...), the palette, the rules of the backgrounds, the
+-- ROM planes when flag 0 is set. A file without it keeps the defaults; the palette stays as it was.
 process (clk_sdram)
+    variable t : std_logic_vector(31 downto 0);   -- the offset in the extension
+    variable u : std_logic_vector(31 downto 0);   -- the offset in the ROM planes
 begin
     if rising_edge(clk_sdram) then
          fileloader_wr64 <= '0';
          fileloader_wr8 <= '0';
+         pal_wr <= '0';
          
          prev_fileloader_act <= fileloader_act;
          if (fileloader_act = '1' and prev_fileloader_act = '0') then -- start of file loader
             regs_wr <= '0';
             fileloader_sna <= '1';
             fileloader_gfx <= '0';
+            fileloader_rom <= '0';
 				fileloader_a8 <= x"3FFF";
 				fileloader_a64 <= x"3FFF"; -- base address to load snap
+            ext_magic <= '0';
+            rom_gfx <= '0';
+            pal_byte <= 0;
+            pal_next <= (others => '0');
+            s_paper00inkff <= '1';
+            s_hide_same <= '1';
+            s_up_mixed <= x"40";
+            s_down_mixed <= x"00";
          end if;
          if (fileloader_act = '0' and prev_fileloader_act = '1') then -- end of file loader
             regs_wr <= '0';
             fileloader_sna <= '0';
             fileloader_gfx <= '0';
+            fileloader_rom <= '0';
          end if;
          
         if fileloader_wr = '1' then
+            t := fileloader_a - EXT_BASE;
+            u := t - 848;
 
             -- snapshot for cpu
             if fileloader_a < 49152 then -- 49152 
@@ -773,13 +838,67 @@ begin
                 end if;
 
             -- registers dump
-            else
+            elsif fileloader_a < EXT_BASE then
                 fileloader_sna <= '0';
                 fileloader_gfx <= '0';
                 regs(223 downto 0) <= fileloader_do & regs(223 downto 8);
-                if (fileloader_a = 442396-1) then -- write regs at the end
+                if (fileloader_a = EXT_BASE-1) then -- write regs at the end
                     regs_wr <= '1';
                 end if;
+
+            -- the header: "K256", version 1, flags, UpColorsMixed, DownColorsMixed; taken at its end
+            elsif t < 16 then
+                case to_integer(unsigned(t(3 downto 0))) is
+                    when 0 => if fileloader_do = x"4B" then ext_magic <= '1'; end if;   -- K
+                    when 1 => if fileloader_do /= x"32" then ext_magic <= '0'; end if;  -- 2
+                    when 2 => if fileloader_do /= x"35" then ext_magic <= '0'; end if;  -- 5
+                    when 3 => if fileloader_do /= x"36" then ext_magic <= '0'; end if;  -- 6
+                    when 4 => if fileloader_do /= x"01" then ext_magic <= '0'; end if;  -- version
+                    when 5 => ext_hdr(7 downto 0) <= fileloader_do;
+                    when 6 => ext_hdr(15 downto 8) <= fileloader_do;
+                    when 7 => ext_hdr(23 downto 16) <= fileloader_do;
+                    when 15 =>
+                        if ext_magic = '1' then
+                            rom_gfx <= ext_hdr(0);
+                            s_paper00inkff <= ext_hdr(1);
+                            s_hide_same <= ext_hdr(2);
+                            s_up_mixed <= ext_hdr(15 downto 8);
+                            s_down_mixed <= ext_hdr(23 downto 16);
+                        end if;
+                    when others => null;
+                end case;
+
+            -- the palette: R, G, B of each colour
+            elsif t < 784 then
+                if ext_magic = '1' then
+                    case pal_byte is
+                        when 0 => pal_rg(15 downto 8) <= fileloader_do; pal_byte <= 1;
+                        when 1 => pal_rg(7 downto 0) <= fileloader_do; pal_byte <= 2;
+                        when 2 =>
+                            pal_d <= pal_rg & fileloader_do;
+                            pal_a <= pal_next;
+                            pal_next <= pal_next + 1;
+                            pal_wr <= '1';
+                            pal_byte <= 0;
+                    end case;
+                end if;
+
+            -- the ROM planes (.GFB): 8 bytes per address 0000-3FFF, as the planes of the RAM
+            elsif t >= 848 and u < 131072 and rom_gfx = '1' then
+                fileloader_gfx <= '0';
+                fileloader_rom <= '1';
+                if (u(2 downto 0) = "000") then
+                    fileloader_buf <= fileloader_do & x"00000000000000";
+                elsif (u(2 downto 0) = "111") then
+                    fileloader_do64 <= fileloader_do & fileloader_buf(63 downto 8);
+                    fileloader_a64 <= "00" & u(16 downto 3);
+                    fileloader_wr64 <= '1';
+                else
+                    fileloader_buf <= fileloader_do & fileloader_buf(63 downto 8);
+                end if;
+
+            else
+                fileloader_rom <= '0';
             end if;
         end if;
     end if;
@@ -803,7 +922,7 @@ end process;
 -- Шина данных CPU
 -- Линии (cpu_gfx_di, байт линии n в битах 8n+7..8n): из ROM - сам ROM, из RAM - своя плоскость,
 -- поток команд (cpu_inst) - байт основной памяти при GFX_INST_FROM_MAIN, из порта - то же, что CPU.
-process (selector, sdram_do, kb_do, joy_do, ay_do, cpu_inst)
+process (selector, sdram_do, kb_do, joy_do, ay_do, cpu_inst, rom_gfx)
     variable d : std_logic_vector(7 downto 0);
 begin
     case selector is
@@ -812,10 +931,11 @@ begin
         when "010" => d := "111" & kb_do;
         when "011" => d := joy_do;
         when "100" => d := ay_do;
+        when "101" => d := x"00";
         when others => d := (others => '1');
     end case;
     cpu_di <= d;
-    if selector = "001" and not (GFX_INST_FROM_MAIN and cpu_inst = '1') then
+    if (selector = "001" or (selector = "000" and rom_gfx = '1')) and not (GFX_INST_FROM_MAIN and cpu_inst = '1') then
         cpu_gfx_di <= sdram_do(71 downto 8);
     else
         cpu_gfx_di <= d & d & d & d & d & d & d & d;
@@ -828,6 +948,8 @@ selector <=
     "010" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_addr(7 downto 0) = X"FE" else    -- Клавиатура, порт xxFE
     "011" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_addr(7 downto 0) = X"1F" else    -- Joystick, порт xx1F
     "100" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_m1_n = '1' and cpu_addr(15 downto 14) = "11" and cpu_addr(1) = '0' else -- AY, порт #FFFD
+    -- порт #FF (плавающая шина): 0, а не #FF; Renegade ждёт на нём не-#FF и без этого тормозит
+    "101" when cpu_iorq_n = '0' and cpu_rd_n = '0' and cpu_m1_n = '1' and cpu_addr(7 downto 0) = X"FF" else
     (others => '1');
     
 end rtl;

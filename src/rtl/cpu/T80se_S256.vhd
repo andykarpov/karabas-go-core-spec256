@@ -112,7 +112,9 @@ entity T80se_S256 is
         INST            : out std_logic;   -- A is taken from PC (opcode, operand)
         GDI             : in  std_logic_vector(LANES*8-1 downto 0) := (others => '0');
         GDO             : out std_logic_vector(LANES*8-1 downto 0);
-        GREG            : out std_logic_vector(LANES*212-1 downto 0)
+        GREG            : out std_logic_vector(LANES*212-1 downto 0);
+        GA              : out std_logic_vector(LANES*16-1 downto 0);   -- see T80_S256
+        GA_EN           : out std_logic
 	);
 end T80se_S256;
 
@@ -166,6 +168,8 @@ begin
             GDI        => GDI_Reg,
             GDO        => GDO,
             GREG       => GREG,
+            GA         => GA,
+            GA_EN      => GA_EN,
             DIRset     => DIRset,
             DIR        => DIR);
 

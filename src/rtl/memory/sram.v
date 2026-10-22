@@ -8,6 +8,11 @@ module sram(
     input wire             wr,
 	 input wire  [8:0]      wr_mask = 9'b111111111,
     input wire             rd,
+	 // karabas: the addresses of the 8 lanes (T80_S256 GA, lane p in bits 16p+15..16p) for a read with
+	 // lane_en: after the 72-bit word of a, the plane byte of each lane whose address differs is read
+	 // at its own address (a table lookup with a byte of the lane); the CPU waits on busy
+	 input wire  [127:0]    lane_a,
+	 input wire             lane_en,
 	 output wire            cpu_ena,
 
     output reg  [20:0]     sram_a = 0,
@@ -41,6 +46,8 @@ localparam S_WRITE2_DONE     = 17;
 localparam S_WRITE3_DONE     = 18;
 localparam S_WRITE4_DONE     = 19;
 localparam S_WRITE5_DONE     = 20;
+localparam S_LANE           = 21;
+localparam S_LANE_DONE      = 22;
 
 reg [4:0] state = S_IDLE;
 reg [71:0] diD;
@@ -48,6 +55,9 @@ reg [15:0] outD;
 reg [15:0] aD;
 assign sram_d = (sram_wr_n != 2'b11) ? outD : 16'bz;
 reg prev_rd, prev_wr;
+reg [127:0] laD;
+reg laEn;
+reg [3:0] lp;
 
 reg [3:0] en = 0;
 always @(posedge clk, posedge reset)
@@ -105,6 +115,9 @@ begin
                     busy <= 1;
                     do_rdy <= 0;
                     aD <= a;
+                    laD <= lane_a;
+                    laEn <= lane_en;
+                    lp <= 0;
                     state <= S_READ1;
                 end                
             end
@@ -166,8 +179,34 @@ begin
             S_READ5_DONE: begin
                 do[71:56] <= sram_d;
                 sram_rd_n <= 2'b11;
-                do_rdy <= 1;
-                state <= S_IDLE;
+                if (laEn)
+                    state <= S_LANE;
+                else begin
+                    do_rdy <= 1;
+                    state <= S_IDLE;
+                end
+            end
+
+            // the lanes with an address of their own: word {address, 1 + p/2}, byte p%2
+            S_LANE: begin
+                if (lp[3]) begin
+                    do_rdy <= 1;
+                    state <= S_IDLE;
+                end
+                else if (laD[16*lp[2:0] +: 16] != aD) begin
+                    sram_a <= {laD[16*lp[2:0] +: 16], 3'b001 + lp[2:1]};
+                    sram_rd_n <= 2'b00;
+                    state <= S_LANE_DONE;
+                end
+                else
+                    lp <= lp + 1'd1;
+            end
+
+            S_LANE_DONE: begin
+                do[8 + 8*lp[2:0] +: 8] <= lp[0] ? sram_d[15:8] : sram_d[7:0];
+                sram_rd_n <= 2'b11;
+                lp <= lp + 1'd1;
+                state <= S_LANE;
             end
 
             S_WRITE1: begin

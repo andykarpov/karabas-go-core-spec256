@@ -10,6 +10,9 @@
 -- - the main CPU of T80se_S256 against T80se: every bus output and REG;
 -- - G_NATURAL: the planes are copies of the SNA RAM instead of the GFX, so
 --   every lane must be the main CPU: GREG of each lane = REG, GDO = DO.
+-- - G_TABLE (gen_table.py): at the end lane p has A = 1 << (7 - p), the entry
+--   of its own byte in a table of reversed bytes (the lane addresses, GA).
+-- The lanes read the memory at their own address (GA) when GA_EN is set.
 -- G_TRACE: a line per instruction (the M1 of each opcode byte) with REG
 -- and GREG, for the comparison with the GZX reference (sim/gzx).
 --
@@ -27,6 +30,7 @@ entity tb_s256 is
 		G_NATURAL    : boolean := true;   -- planes = SNA RAM
 		G_IMM_MASTER : boolean := true;   -- operands of the instruction stream from the main memory
 		G_CYCLES     : integer := 1000000;
+		G_TABLE      : boolean := false;  -- the lane address test of gen_table.py
 		G_TRACE      : string  := "";
 		G_MAX_REPORT : integer := 20
 	);
@@ -60,6 +64,8 @@ architecture sim of tb_s256 is
 	signal d_gdi  : std_logic_vector(LANES*8-1 downto 0) := (others => '1');
 	signal d_gdo  : std_logic_vector(LANES*8-1 downto 0);
 	signal d_greg : std_logic_vector(LANES*212-1 downto 0);
+	signal d_ga   : std_logic_vector(LANES*16-1 downto 0);
+	signal d_ga_en : std_logic;
 
 	function hex(v : std_logic_vector) return string is
 		constant n : integer := (v'length + 3) / 4;
@@ -94,7 +100,7 @@ begin
 			M1_n => d_m1_n, MREQ_n => d_mreq_n, IORQ_n => d_iorq_n, RD_n => d_rd_n, WR_n => d_wr_n,
 			RFSH_n => d_rfsh_n, HALT_n => d_halt_n, BUSAK_n => open, A => d_a, DI => d_di, DO => d_do,
 			DIRset => dirset, DIR => dir, REG => d_reg, MC_O => d_mc, TS_O => d_ts, IR_O => open, PC_O => open,
-			INST => d_inst, GDI => d_gdi, GDO => d_gdo, GREG => d_greg);
+			INST => d_inst, GDI => d_gdi, GDO => d_gdo, GREG => d_greg, GA => d_ga, GA_EN => d_ga_en);
 
 	-- clock and interrupts; the clock stops after G_CYCLES
 	process
@@ -119,7 +125,7 @@ begin
 		variable ref_mem, dut_mem : mem_t;
 		variable planes : planes_t;
 		variable regs : std_logic_vector(223 downto 0) := (others => '0');
-		variable n, a : integer;
+		variable n, a, la : integer;
 		variable io : std_logic_vector(7 downto 0);
 
 		function io_read(addr : std_logic_vector(15 downto 0)) return std_logic_vector is
@@ -200,10 +206,14 @@ begin
 			else
 				d_di <= dut_mem(a);
 				for p in 0 to LANES-1 loop
+					la := a;
+					if d_ga_en = '1' then
+						la := to_integer(unsigned(d_ga(p*16+15 downto p*16)));
+					end if;
 					if d_inst = '1' and G_IMM_MASTER then
 						d_gdi(p*8+7 downto p*8) <= dut_mem(a);
 					else
-						d_gdi(p*8+7 downto p*8) <= planes(p)(a);
+						d_gdi(p*8+7 downto p*8) <= planes(p)(la);
 					end if;
 				end loop;
 			end if;
@@ -268,6 +278,14 @@ begin
 		end loop;
 		if G_TRACE /= "" then
 			file_close(tf);
+		end if;
+		if G_TABLE then
+			for p in 0 to LANES-1 loop
+				if d_greg(p*212+7 downto p*212) /= std_logic_vector(to_unsigned(2**(7-p), 8)) then
+					err("table: lane " & integer'image(p) & " A " & hex(d_greg(p*212+7 downto p*212)) &
+						" /= " & integer'image(2**(7-p)));
+				end if;
+			end loop;
 		end if;
 		write(l, string'("tb_s256: ") & integer'image(errors) & " errors");
 		writeline(output, l);

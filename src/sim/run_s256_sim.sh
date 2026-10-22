@@ -32,4 +32,10 @@ for seed in $SEEDS; do
 	python3 gen_random.py $seed $WORK/random$seed.rom $WORK/random$seed.256
 	run "random code, seed $seed" $WORK/random$seed.rom $WORK/random$seed.256
 done
+python3 gen_table.py $WORK/table.rom $WORK/table.256
+echo "==== table lookup (lane addresses), 2000 clocks"
+out=$(ghdl -r $FLAGS tb_s256 -gG_FILE256=$WORK/table.256 -gG_ROM=$WORK/table.rom -gG_NATURAL=false -gG_TABLE=true -gG_CYCLES=2000 2>&1 \
+	| grep -v "std_logic_arith.vhdl\|NUMERIC_STD\|^$" || true)
+echo "$out"
+echo "$out" | grep -q "tb_s256: 0 errors" || fail=1
 [ $fail = 0 ] && echo "==== all passed" || { echo "==== FAILED"; exit 1; }
