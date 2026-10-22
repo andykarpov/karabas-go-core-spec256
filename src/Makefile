@@ -1,19 +1,17 @@
 # Command line build of the Spec256 core: the steps and options of the ISE 14.7 project navigator
 # (the .xise project of the board, its karabas_<board>.cmd_log), as karabas-go-core-tsconf does it.
 #
-#   make                 the boards of BOARDS (spec256.kg3 for now)
+#   make                 all the boards (spec256.kg1 Go, .kg2 Mini, .kg3 Mini G)
 #   make minig           one board: synthesis, implementation, bitstream, .kg file
 #   make minig-xst       one step: <board>-xst (.ngc), <board>-impl (.bin), <board>-core (.kg)
 #   make minig-report    LUTs, slices, block RAMs and the timing result of the last build
 #   make clean           the intermediate files (not the .bin / .kg files, they are in git)
 #
 # Inputs per board: karabas_<board>.prj (the source list), .xst, .ucf, .ut.
-# Only the Mini G is converted yet; the Mini and the Go still have their .xise projects
-# (on the old T80se64, see docs/SIMD.md).
 
 ISE_SETTINGS ?= /opt/Xilinx/14.7/ISE_DS/settings64.sh
 PART = xc6slx25-ftg256-2
-BOARDS = minig
+BOARDS = go mini minig
 
 SHELL = /bin/bash
 .SHELLFLAGS = -e -o pipefail -c
@@ -21,13 +19,17 @@ SHELL = /bin/bash
 # settings64.sh takes the arguments of the shell that sources it: none here
 XIL = source $(ISE_SETTINGS) > /dev/null;
 
+KG_go = spec256.kg1
+KG_mini = spec256.kg2
 KG_minig = spec256.kg3
+JSON_go = core.json
+JSON_mini = core_mini.json
 JSON_minig = core_minig.json
 
-# map / par options of the .xise project (area strategy)
-MAP_T_minig = 1
-MAP_OPT_minig = -logic_opt off -ol high -xt 0 -register_duplication off -r 4 -global_opt off -mt off -ir off -pr b -lc area -power off
-PAR_OPT_minig = -ol high -mt off
+# map / par options of the Mini G .xise project (area strategy), the same for every board
+MAP_OPT = -logic_opt off -ol high -xt 0 -register_duplication off -r 4 -global_opt off -mt off -ir off -pr b -lc area -power off
+PAR_OPT = -ol high -mt off
+MAP_T = 1
 
 # included by the sources, not in the prj
 INCLUDES = $(wildcard ../modules/rtl/mcu/*.vh)
@@ -45,8 +47,8 @@ karabas_$(1).ngc: karabas_$(1).prj karabas_$(1).xst $$(SRC_$(1)) $(INCLUDES)
 
 karabas_$(1).bin: karabas_$(1).ngc karabas_$(1).ucf karabas_$(1).ut
 	$(XIL) ngdbuild -intstyle ise -dd _ngo -nt timestamp -uc karabas_$(1).ucf -p $(PART) karabas_$(1).ngc karabas_$(1).ngd
-	$(XIL) map -intstyle ise -p $(PART) -w $(MAP_OPT_$(1)) -t $(MAP_T_$(1)) -o karabas_$(1)_map.ncd karabas_$(1).ngd karabas_$(1).pcf
-	$(XIL) par -w -intstyle ise $(PAR_OPT_$(1)) karabas_$(1)_map.ncd karabas_$(1).ncd karabas_$(1).pcf
+	$(XIL) map -intstyle ise -p $(PART) -w $(MAP_OPT) -t $(MAP_T) -o karabas_$(1)_map.ncd karabas_$(1).ngd karabas_$(1).pcf
+	$(XIL) par -w -intstyle ise $(PAR_OPT) karabas_$(1)_map.ncd karabas_$(1).ncd karabas_$(1).pcf
 	$(XIL) trce -intstyle ise -v 3 -s 2 -n 3 -fastpaths -xml karabas_$(1).twx karabas_$(1).ncd -o karabas_$(1).twr karabas_$(1).pcf -ucf karabas_$(1).ucf
 	$(XIL) bitgen -intstyle ise -f karabas_$(1).ut karabas_$(1).ncd
 

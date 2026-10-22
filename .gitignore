@@ -74,6 +74,12 @@ src/sim/work/
 !src/karabas_minig.prj
 !src/karabas_minig.xst
 !src/karabas_minig.ut
+!src/karabas_mini.prj
+!src/karabas_mini.xst
+!src/karabas_mini.ut
+!src/karabas_go.prj
+!src/karabas_go.xst
+!src/karabas_go.ut
 
 # ISim build of src/sim
 src/sim/build_load/

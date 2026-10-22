@@ -21,16 +21,16 @@
 -- @author Andy Karpov <https://github.com/andykarpov>
 -- @author MVV <https://github.com/mvvproject>
 -- EU, 2026
-
+--
 ------------------------------------------------------------------------------------------------------------------
 
-library IEEE; 
-use IEEE.std_logic_1164.all; 
-use IEEE.std_logic_unsigned.all;
-use IEEE.numeric_std.all; 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.std_logic_unsigned.all;
 
-library unisim;
-use unisim.vcomponents.all;
+library UNISIM;
+use UNISIM.VComponents.all;
 
 entity karabas_mini is
 port (
@@ -56,10 +56,10 @@ port (
     SDR_RAS_N        : out    std_logic;
     SDR_DQ           : inout  std_logic_vector (15 downto 0);
 
-    SD_CS_N          : out    std_logic := '1';
-    SD_DI            : out    std_logic := '1';
+    SD_CS_N          : out    std_logic;
+    SD_DI            : out    std_logic;
     SD_DO            : in     std_logic;
-    SD_CLK           : out    std_logic := '1';
+    SD_CLK           : out    std_logic;
     SD_DET_N         : in     std_logic;
 
     VGA_R            : in     std_logic_vector (7 downto 0);
@@ -117,9 +117,9 @@ port (
     FLASH_WP_N       : out    std_logic;
     FLASH_HOLD_N     : out    std_logic
 );
-end karabas_mini;
+end entity;
 
-architecture Behavioral of karabas_mini is
+architecture rtl of karabas_mini is
 
 -- signals
 signal clk_bus, clk_vga, clk_sdr : std_logic;
@@ -134,18 +134,19 @@ signal adc_l, adc_r : std_logic_vector(23 downto 0);
 signal hdmi_rgb : std_logic_vector(23 downto 0);
 signal hdmi_hsync, hdmi_vsync, hdmi_blank : std_logic;
 signal dvi_only : std_logic;
-
-
--- burst transfers from the mcu (karabas-go-firmware docs/burst_protocol.md)
+signal vid_de, audio_en : std_logic;
 signal mcu_burst_ready : std_logic;
 
 begin
 
 MCU_IO(1) <= mcu_burst_ready;
 MCU_IO(0) <= 'Z';
-MCU_IO(3 downto 2) <= (others => 'Z');
+MCU_IO(3 downto 2) <= "ZZ";
 
 U1: entity work.spec256
+generic map(
+    BURST_MAX_MHZ     => 0         -- bursts at the clock of the link: MCU_SCK is not on a global clock pin (as tsconf)
+)
 port map(
     -- clock
     CLK_50MHZ         => CLK_50MHZ,
@@ -163,7 +164,6 @@ port map(
     MCU_MOSI          => MCU_MOSI,
     MCU_MISO          => MCU_MISO,
     MCU_IO            => MCU_IO(3 downto 0),
-    MCU_BURST_CS_N    => MCU_IO(0), -- firmware IO0 (GPIO14), G6
     MCU_BURST_READY   => mcu_burst_ready,
 
     -- rgb
@@ -191,13 +191,14 @@ port map(
 	 MA					 => MA,
 	 MD					 => MD,
 	 MRD_N				 => MRD_N,
-	 MWR_N				 => MWR_N	 
+	 MWR_N				 => MWR_N
 );
 
 -- HDMI encoder
-U2: entity work.zhdmi_top
+U2: entity work.hdmi_top
 generic map(
-    SAMPLERATE        => 44100
+    SAMPLERATE        => 44100,
+    CLKRATE           => 25000000
 )
 port map(
     clk               => clk_vga,
@@ -205,81 +206,74 @@ port map(
     vga_rgb           => vid_rgb,
     vga_hs            => vid_hs,
     vga_vs            => vid_vs,
-    vga_de            => not vid_blank,
-    audio_en          => not dvi_only,
+    vga_de            => vid_de,
+    audio_en          => audio_en,
     audio_l           => audio_mix_l,
     audio_r           => audio_mix_r,
     tmds_p            => TMDS_P,
     tmds_n            => TMDS_N
 );
+vid_de   <= not vid_blank;
+audio_en <= not dvi_only;
 
--- Audio PWM
-U3: entity work.dac
-port map(
-    I_CLK             => clk_bus,
-    I_RESET           => areset,
-    I_DATA            => not(audio_mix_l(15)) & audio_mix_l(14 downto 0),
-    O_DAC             => AUDIO_L
-);
-
-U4: entity work.dac
-port map(
-    I_CLK             => clk_bus,
-    I_RESET           => areset,
-    I_DATA            => not(audio_mix_r(15)) & audio_mix_r(14 downto 0),
-    O_DAC             => AUDIO_R
-);
-
--- unused signals
-ESP_RESET_N           <= 'Z';
-ESP_BOOT_N            <= 'Z';
-
-FLASH_CS_N            <= '1';
-FLASH_DI              <= '1';
-FLASH_SCK             <= '1';
-FLASH_WP_N            <= '1';
-FLASH_HOLD_N          <= '1';
-
-FT_SPI_CS_N           <= '1';
-FT_SPI_SCK            <= '1';
-FT_SPI_MOSI           <= '1';
-FT_RESET              <= not reset;
-FT_CLK_OUT            <= '0';
-
-TAPE_OUT              <= '0';
-ADC_CLK               <= '0';
-ADC_BCK               <= '0';
-ADC_LRCK              <= '0';
-
-WA                    <= "000";
-WCS_N                 <= "11";
-WRD_N                 <= '1';
-WWR_N                 <= '1';
-WRESET_N              <= '1';
-
-SD_CS_N               <= '1';
-SD_CLK                <= '1';
-
-MIDI_TX               <= '1';
-MIDI_CLK              <= '0';
-MIDI_RESET_N          <= '1';
-
-u_sdr_clk: ODDR2 -- negative DDR clock
+-- sigma-delta DACs on the audio pins (karabas-go-modules kg_sigma_delta_dac, offset binary)
+U3: entity work.kg_sigma_delta_dac
 generic map(
-    DDR_ALIGNMENT     => "NONE",
-    INIT              => '0',
-    SRTYPE            => "SYNC"
+    MSBI              => 15
 )
 port map(
-    Q                 => SDR_CLK, 
-    C0                => clk_sdr, 
-    C1                => not(clk_sdr), 
-    CE                => '1', 
-    D0                => '0', 
-    D1                => '1', 
-    R                 => '0', 
-    S                 => '0'
+    clk               => clk_bus,
+    reset             => areset,
+    din               => not(audio_mix_l(15)) & audio_mix_l(14 downto 0),
+    dout              => AUDIO_L
 );
 
-end Behavioral;
+U4: entity work.kg_sigma_delta_dac
+generic map(
+    MSBI              => 15
+)
+port map(
+    clk               => clk_bus,
+    reset             => areset,
+    din               => not(audio_mix_r(15)) & audio_mix_r(14 downto 0),
+    dout              => AUDIO_R
+);
+
+FT_SPI_CS_N         <= '1';
+FT_SPI_SCK          <= '1';
+FT_SPI_MOSI         <= '1';
+FT_RESET            <= '1';
+FT_CLK_OUT          <= '0';
+ESP_RESET_N         <= 'Z';
+ESP_BOOT_N          <= 'Z';
+FLASH_CS_N          <= '1';
+FLASH_DI            <= '1';
+FLASH_SCK           <= '1';
+FLASH_WP_N          <= '1';
+FLASH_HOLD_N        <= '1';
+TAPE_OUT            <= '0';
+ADC_CLK             <= '0';
+ADC_BCK             <= '0';
+ADC_LRCK            <= '0';
+WA                  <= "000";
+WCS_N               <= "11";
+WRD_N               <= '1';
+WWR_N               <= '1';
+WRESET_N            <= '1';
+--MA                  <= (others => '0');
+--MD                  <= (others => 'Z');
+--MWR_N               <= "11";
+--MRD_N               <= "11";
+SD_CS_N             <= '1';
+SD_DI               <= '1';
+SD_CLK              <= '1';
+MIDI_TX             <= '1';
+MIDI_CLK            <= '0';
+MIDI_RESET_N        <= '1';
+
+u_sdr_clk: ODDR2 -- negative DDR clock
+generic map(DDR_ALIGNMENT => "NONE", INIT => '0', SRTYPE => "SYNC")
+port map(Q => SDR_CLK, C0 => clk_sdr, C1 => not(clk_sdr), CE => '1', D0 => '0', D1 => '1', R => '0', S => '0');
+
+end architecture;
 

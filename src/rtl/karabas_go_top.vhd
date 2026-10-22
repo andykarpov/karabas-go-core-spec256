@@ -21,16 +21,16 @@
 -- @author Andy Karpov <https://github.com/andykarpov>
 -- @author MVV <https://github.com/mvvproject>
 -- EU, 2026
-
+--
 ------------------------------------------------------------------------------------------------------------------
 
-library IEEE; 
-use IEEE.std_logic_1164.all; 
-use IEEE.std_logic_unsigned.all;
-use IEEE.numeric_std.all; 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.std_logic_unsigned.all;
 
-library unisim;
-use unisim.vcomponents.all;
+library UNISIM;
+use UNISIM.VComponents.all;
 
 entity karabas_go is
 port (
@@ -72,10 +72,10 @@ port (
 	SDR_RAS_N 			: out  STD_LOGIC;
 	SDR_DQ 				: inout  STD_LOGIC_VECTOR (15 downto 0);
 
-	SD_CS_N 				: out  STD_LOGIC := '1';
-	SD_DI 				: out  STD_LOGIC := '1';
+	SD_CS_N 				: out  STD_LOGIC;
+	SD_DI 				: out  STD_LOGIC;
 	SD_DO 				: in  STD_LOGIC;
-	SD_CLK 				: out  STD_LOGIC := '1';
+	SD_CLK 				: out  STD_LOGIC;
 	SD_DET_N 			: in  STD_LOGIC;
 
 	FDC_INDEX 			: in  STD_LOGIC;
@@ -122,9 +122,9 @@ port (
 	FLASH_WP_N 			: out std_logic;
 	FLASH_HOLD_N 		: out std_logic
 );
-end karabas_go;
+end entity;
 
-architecture Behavioral of karabas_go is
+architecture rtl of karabas_go is
 
 -- signals
 signal clk_bus, clk_vga, clk_sdr : std_logic;
@@ -136,16 +136,22 @@ signal vid_hs, vid_vs, vid_blank: std_logic;
 signal audio_mix_l, audio_mix_r : std_logic_vector(15 downto 0);
 signal adc_l, adc_r : std_logic_vector(23 downto 0);
 
-
--- burst transfers from the mcu (karabas-go-firmware docs/burst_protocol.md)
 signal mcu_burst_ready : std_logic;
+signal mcu_io_core : std_logic_vector(3 downto 0);
 
 begin
 
+-- burst lines of the Go: firmware IO0 (GPIO14) = MCU_IO(1) (M11) the burst cs_n, IO1 (GPIO2) = MCU_IO(0)
+-- (N9) the burst ready (the other way round than the Mini and the Mini G)
 MCU_IO(0) <= mcu_burst_ready;
-MCU_IO(3 downto 1) <= (others => 'Z');
+MCU_IO(1) <= 'Z';
+MCU_IO(3 downto 2) <= "ZZ";
+mcu_io_core <= MCU_IO(3 downto 2) & '1' & MCU_IO(1);   -- [0] burst cs_n, [2] sd2 cs_n, [3] ft cs_n of spec256
 
 U1: entity work.spec256
+generic map(
+    BURST_MAX_MHZ     => 0         -- bursts at the clock of the link: MCU_SCK is not on a global clock pin (as tsconf)
+)
 port map(
     -- clock
     CLK_50MHZ         => CLK_50MHZ,
@@ -162,15 +168,14 @@ port map(
     MCU_SCK           => MCU_SCK,
     MCU_MOSI          => MCU_MOSI,
     MCU_MISO          => MCU_MISO,
-    MCU_IO            => MCU_IO(3 downto 0),
-    MCU_BURST_CS_N    => MCU_IO(1), -- firmware IO0 (GPIO14), M11
+    MCU_IO            => mcu_io_core,
     MCU_BURST_READY   => mcu_burst_ready,
 
     -- rgb
     VGA_RGB           => vid_rgb,
     VGA_HS            => vid_hs,
     VGA_VS            => vid_vs,
-    VGA_BLANK         => open,
+    VGA_BLANK         => vid_blank,
     DVI_ONLY          => open,
 
     -- audio
@@ -191,80 +196,73 @@ port map(
 	 MA					 => MA,
 	 MD					 => MD,
 	 MRD_N				 => MRD_N,
-	 MWR_N				 => MWR_N	 
+	 MWR_N				 => MWR_N
 );
 
--- Audio I2S DAC
-U3: entity work.pcm5102
-port map (
-	clk 				=> clk_bus,
-	reset 			=> reset,
-	
-	left 				=> audio_mix_l,
-	right 			=> audio_mix_r,
-	
-	lrck 				=> DAC_LRCK,
-	bck 				=> DAC_BCK,
-	din 				=> DAC_DAT
-);
+-- VGA: the video DAC, clocked on the falling edge of clk_vga
+u_vclk: ODDR2
+generic map(DDR_ALIGNMENT => "NONE", INIT => '0', SRTYPE => "SYNC")
+port map(Q => V_CLK, C0 => clk_vga, C1 => not(clk_vga), CE => '1', D0 => '1', D1 => '0', R => '0', S => '0');
+VGA_R               <= vid_rgb(23 downto 16);
+VGA_G               <= vid_rgb(15 downto 8);
+VGA_B               <= vid_rgb(7 downto 0);
+VGA_HS              <= vid_hs;
+VGA_VS              <= vid_vs;
 
-DAC_MUTE 			<= '1';
-
-VCLK_buf: ODDR2 port map(Q => V_CLK, C0 => clk_vga, C1 => not clk_vga, D0 => '1', D1 => '0');
-VGA_R 				<= vid_rgb(23 downto 16);
-VGA_G 				<= vid_rgb(15 downto 8);
-VGA_B 				<= vid_rgb(7 downto 0);
-VGA_HS 				<= vid_hs;
-VGA_VS 				<= vid_vs;
-
-ESP_RESET_N 		<= 'Z';
-ESP_BOOT_N 			<= 'Z';
-
-FT_SPI_CS_N			<= '1';
-FT_SPI_SCK 			<= '0';
-FT_OE_N 				<= '1';
-
-MIDI_CLK				<= '0';
-MIDI_RESET_N		<= '1';
-MIDI_TX				<= '0';
-TAPE_OUT				<= '0';
-
-FLASH_CS_N 			<= '1';
-FLASH_DI 			<= '1';
-FLASH_SCK 			<= '1';
-FLASH_WP_N 			<= '1';
-FLASH_HOLD_N 		<= '1';
-
-FDC_DRIVE			<= "11";
-FDC_SIDE_N			<= '1';
-FDC_WDATA			<= '1';
-FDC_MOTOR			<= '1';
-FDC_WGATE			<= '1';
-FDC_STEP				<= '1';
-FDC_DIR				<= '1';
-
-WCS_N					<= "11";
-WRESET_N				<= '1';
-WA						<= "000";
-WRD_N					<= '1';
-WWR_N					<= '1';
-
-u_sdr_clk: ODDR2 -- negative DDR clock
+-- I2S DAC (karabas-go-modules kg_pcm5102: all 16 bits, pcm5102.v sent 15 of them)
+U3: entity work.kg_pcm5102
 generic map(
-	DDR_ALIGNMENT 	=> "NONE",
-	INIT				=> '0',
-	SRTYPE			=> "SYNC"
+    DIV_BITS          => 4
 )
 port map(
-	Q 					=> SDR_CLK, 
-	C0 				=> clk_sdr, 
-	C1 				=> not(clk_sdr), 
-	CE 				=> '1', 
-	D0 				=> '0', 
-	D1 				=> '1', 
-	R 					=> '0', 
-	S 					=> '0'
+    clk               => clk_bus,
+    reset             => areset,
+    left              => audio_mix_l,
+    right             => audio_mix_r,
+    bck               => DAC_BCK,
+    lrck              => DAC_LRCK,
+    din               => DAC_DAT
 );
+DAC_MUTE            <= '1';
 
-end Behavioral;
+FT_SPI_CS_N         <= '1';
+FT_SPI_SCK          <= '1';
+FT_SPI_MOSI         <= '1';
+FT_OE_N             <= '1';
+ESP_RESET_N         <= 'Z';
+ESP_BOOT_N          <= 'Z';
+FLASH_CS_N          <= '1';
+FLASH_DI            <= '1';
+FLASH_SCK           <= '1';
+FLASH_WP_N          <= '1';
+FLASH_HOLD_N        <= '1';
+TAPE_OUT            <= '0';
+WA                  <= "000";
+WCS_N               <= "11";
+WRD_N               <= '1';
+WWR_N               <= '1';
+WRESET_N            <= '1';
+--MA                  <= (others => '0');
+--MD                  <= (others => 'Z');
+--MWR_N               <= "11";
+--MRD_N               <= "11";
+SD_CS_N             <= '1';
+SD_DI               <= '1';
+SD_CLK              <= '1';
+MIDI_TX             <= '1';
+MIDI_CLK            <= '0';
+MIDI_RESET_N        <= '1';
+FDC_DRIVE           <= "11";
+FDC_SIDE_N          <= '1';
+FDC_WDATA           <= '1';
+FDC_MOTOR           <= '1';
+FDC_WGATE           <= '1';
+FDC_STEP            <= '1';
+FDC_DIR             <= '1';
+
+u_sdr_clk: ODDR2 -- negative DDR clock
+generic map(DDR_ALIGNMENT => "NONE", INIT => '0', SRTYPE => "SYNC")
+port map(Q => SDR_CLK, C0 => clk_sdr, C1 => not(clk_sdr), CE => '1', D0 => '0', D1 => '1', R => '0', S => '0');
+
+end architecture;
 
