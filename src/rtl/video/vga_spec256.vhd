@@ -44,8 +44,16 @@ architecture rtl of vga_spec256 is
 	signal gfx_pixel		: std_logic_vector(7 downto 0);
 	signal gfx_pixel_reg	: std_logic_vector(55 downto 0);
 	signal gfx_rgb			: std_logic_vector(23 downto 0);
+	-- the gfx pixel is 13 clocks ahead of the ordinary pixel of the same place: delayed to meet it
+	-- (0xFF shows the ordinary pixel through)
+	constant GFX_DELAY		: natural := 13;
+	type gfx_dl_t is array (1 to GFX_DELAY) of std_logic_vector(8 downto 0);
+	signal gfx_dl			: gfx_dl_t;
+	signal gfx_px			: std_logic_vector(7 downto 0);
+	signal gfx_px_paper	: std_logic;
 
 	signal paper			: std_logic;
+	signal paper0			: std_logic;	-- paper at the address of the column (the vertical counter steps inside column 31)
 	signal paper1			: std_logic;
 	signal pixel			: std_logic;	
 	signal vid_reg			: std_logic_vector(7 downto 0);
@@ -89,6 +97,11 @@ begin
 			when "1111" =>	gfx_pixel <= gfx_pixel_reg(49) & gfx_pixel_reg(42) & gfx_pixel_reg(35) & gfx_pixel_reg(28) & gfx_pixel_reg(21) & gfx_pixel_reg(14) & gfx_pixel_reg( 7) & gfx_pixel_reg(0);
 			when others =>	null;
 		end case;
+
+		gfx_dl(1) <= gfx_paper1 & gfx_pixel;
+		for i in 2 to GFX_DELAY loop
+			gfx_dl(i) <= gfx_dl(i-1);
+		end loop;
 		
 		-- std pixel
 		case spec_h_count_reg(3 downto 1) is
@@ -102,6 +115,7 @@ begin
 				pixel <= pixel_reg(3);
 			when "100" => 
 				pixel <= pixel_reg(2);
+				paper0 <= paper;
 				addr_reg <= spec_v_count_reg(8 downto 7) & spec_v_count_reg(3 downto 1) & spec_v_count_reg(6 downto 4) & spec_h_count_reg(8 downto 4);
 			when "101" =>
 				pixel <= pixel_reg(1);
@@ -113,14 +127,21 @@ begin
 				pixel <= vid_reg(7);
 				pixel_reg <= vid_reg;
 				attr_reg <= I_DATA;
-				paper1 <= paper;
+				paper1 <= paper0;
 			when others => null;
 		end case;
 		
 	end if;
 	
-	-- Spec256 palette
-	case gfx_pixel is
+end process;
+
+gfx_px		<= gfx_dl(GFX_DELAY)(7 downto 0);
+gfx_px_paper	<= gfx_dl(GFX_DELAY)(8);
+
+-- Spec256 palette
+process (gfx_px)
+begin
+	case gfx_px is
 		when X"00" => gfx_rgb <= X"000000";
 		when X"01" => gfx_rgb <= X"00009b";
 		when X"02" => gfx_rgb <= X"172fab";
@@ -422,16 +443,19 @@ rgb <= attr_reg(4) & (attr_reg(4) and attr_reg(6)) &
 		 attr_reg(0) & (attr_reg(0) and attr_reg(6));
 
 O_R <= (others => '0') when (I_BLANK = '1') else 
-		 gfx_rgb(23 downto 16) when gfx_paper1 = '1' and I_MODE = '1' else
+		 rgb(5 downto 4) & rgb(5 downto 4) & rgb(5 downto 4) & rgb(5 downto 4) when gfx_px_paper = '1' and I_MODE = '1' and gfx_px = x"FF" else
+		 gfx_rgb(23 downto 16) when gfx_px_paper = '1' and I_MODE = '1' else
 		 rgb(5 downto 4) & rgb(5 downto 4) & rgb(5 downto 4) & rgb(5 downto 4) when paper1 = '1' and I_MODE = '0' else 
 		 (others => I_BORDER(1));
 
 O_G <= (others => '0') when (I_BLANK = '1') else 
-		 gfx_rgb(15 downto 8) when gfx_paper1 = '1' and I_MODE = '1' else 
+		 rgb(3 downto 2) & rgb(3 downto 2) & rgb(3 downto 2) & rgb(3 downto 2) when gfx_px_paper = '1' and I_MODE = '1' and gfx_px = x"FF" else
+		 gfx_rgb(15 downto 8) when gfx_px_paper = '1' and I_MODE = '1' else 
 		 rgb(3 downto 2) & rgb(3 downto 2) & rgb(3 downto 2) & rgb(3 downto 2) when paper1 = '1' and I_MODE = '0' else 		 
 		 (others => I_BORDER(2));
 O_B <= (others => '0') when (I_BLANK = '1') else 
-		 gfx_rgb(7 downto 0) when gfx_paper1 = '1' and I_MODE = '1' else 
+		 rgb(1 downto 0) & rgb(1 downto 0) & rgb(1 downto 0) & rgb(1 downto 0) when gfx_px_paper = '1' and I_MODE = '1' and gfx_px = x"FF" else
+		 gfx_rgb(7 downto 0) when gfx_px_paper = '1' and I_MODE = '1' else 
 		 rgb(1 downto 0) & rgb(1 downto 0) & rgb(1 downto 0) & rgb(1 downto 0) when paper1 = '1' and I_MODE = '0' else 
 		 (others => I_BORDER(0));
 

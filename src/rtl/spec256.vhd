@@ -49,6 +49,11 @@ use IEEE.std_logic_unsigned.all;
 use IEEE.numeric_std.all; 
 
 entity spec256 is
+generic (
+    -- operands of the instruction stream (LD A,n ...) of the lanes: from the main memory (NextTang)
+    -- or from the lane planes (GZX), see docs/SIMD.md 1.2
+    GFX_INST_FROM_MAIN : boolean := true
+);
 port (
     -- Clock
     CLK_50MHZ   : in std_logic;    -- 50MHz
@@ -113,12 +118,7 @@ signal cpu_do        : std_logic_vector(7 downto 0);
 signal cpu_di        : std_logic_vector(7 downto 0);
 signal cpu_gfx_do    : std_logic_vector(63 downto 0);
 signal cpu_gfx_di    : std_logic_vector(63 downto 0);
-signal cpu_mc        : std_logic_vector(2 downto 0);
-signal cpu_ts        : std_logic_vector(2 downto 0);
-signal cpu_ir        : std_logic_vector(7 downto 0);
-signal cpu_pc        : std_logic_vector(15 downto 0);
-signal cpu_regs 		: std_logic_vector(211 downto 0);
-signal gfx_busy		: std_logic;
+signal cpu_inst      : std_logic;  -- the address is the instruction stream
 
 -- Memory
 signal vram_wr       : std_logic;
@@ -221,8 +221,11 @@ port map (
     clk_vga             => clk_vga           -- 25.20 MHz
 );
     
--- CPU0
-U2: entity work.t80se
+-- CPU: the main Z80 and the 8 graphical lanes of Spec256 (docs/SIMD.md)
+U2: entity work.T80se_S256
+generic map (
+    LANES               => 8
+)
 port map (
     RESET_n             => cpu_reset_n,
     CLK_n               => clk_sdram,
@@ -236,16 +239,23 @@ port map (
     IORQ_n              => cpu_iorq_n,
     RD_n                => cpu_rd_n,
     WR_n                => cpu_wr_n,
+    RFSH_n              => open,
+    HALT_n              => open,
+    BUSAK_n             => open,
     A                   => cpu_addr,
     DI                  => cpu_di,
     DO                  => cpu_do,
     DIR                 => regs(211 downto 0),
     DIRSet              => regs_wr,
-    MC_O                => cpu_mc,
-    TS_O                => cpu_ts,
-    IR_O                => cpu_ir,
-    PC_O                => cpu_pc,
-    REG                 => cpu_regs
+    REG                 => open,
+    MC_O                => open,
+    TS_O                => open,
+    IR_O                => open,
+    PC_O                => open,
+    INST                => cpu_inst,
+    GDI                 => cpu_gfx_di,
+    GDO                 => cpu_gfx_do,
+    GREG                => open
 );
 
 -- Video
@@ -336,36 +346,6 @@ port map (
     data_a_i            => vram_gfx_di,
     we_i                => vram_gfx_wr,
     data_b_o            => vga_gfx_data
-);
-
--- gfx cpu (SIMD extender)
-U8: entity work.gfx_cpu
-port map (
-    clk                 => clk_sdram,
-    ena                 => cpu_ena,
-    reset               => not cpu_reset_n,
-
-    -- cpu
-    addr                => cpu_addr,
-    rd_n                => cpu_rd_n,
-    wr_n                => cpu_wr_n,
-    m1_n                => cpu_m1_n,
-    mreq_n              => cpu_mreq_n,
-    di                  => cpu_di,
-    regs                => cpu_regs,
-    ir                  => cpu_ir,
-    mc                  => cpu_mc,
-    ts                  => cpu_ts,
-
-    -- gfx data
-    gfx_di              => cpu_gfx_di,
-    gfx_do              => cpu_gfx_do,
-
-	 -- sram do rdy
-	 ram_rdy				   => sdram_rdy,
-
-    -- gfx busy
-    busy                => gfx_busy
 );
 
 -- MCU
@@ -613,17 +593,24 @@ end process;
 
 -------------------------------------------------------------------------------
 -- Шина данных CPU
-process (selector, sdram_do, kb_do, joy_do)
+-- Линии (cpu_gfx_di, байт линии n в битах 8n+7..8n): из ROM - сам ROM, из RAM - своя плоскость,
+-- поток команд (cpu_inst) - байт основной памяти при GFX_INST_FROM_MAIN, из порта - то же, что CPU.
+process (selector, sdram_do, kb_do, joy_do, cpu_inst)
+    variable d : std_logic_vector(7 downto 0);
 begin
     case selector is
-        when "000" => cpu_di <= sdram_do(7 downto 0); 
-							 cpu_gfx_di <= sdram_do(7 downto 0) & sdram_do(7 downto 0) & sdram_do(7 downto 0) & sdram_do(7 downto 0) & 
-											   sdram_do(7 downto 0) & sdram_do(7 downto 0) & sdram_do(7 downto 0) & sdram_do(7 downto 0);
-        when "001" => cpu_di <= sdram_do(7 downto 0); cpu_gfx_di <= sdram_do(71 downto 8);
-        when "010" => cpu_di <= "111" & kb_do; cpu_gfx_di <= (others => '1');
-        when "011" => cpu_di <= joy_do; cpu_gfx_di <= (others => '1');
-        when others => cpu_di <= (others => '1'); cpu_gfx_di <= (others => '1');
+        when "000" => d := sdram_do(7 downto 0);
+        when "001" => d := sdram_do(7 downto 0);
+        when "010" => d := "111" & kb_do;
+        when "011" => d := joy_do;
+        when others => d := (others => '1');
     end case;
+    cpu_di <= d;
+    if selector = "001" and not (GFX_INST_FROM_MAIN and cpu_inst = '1') then
+        cpu_gfx_di <= sdram_do(71 downto 8);
+    else
+        cpu_gfx_di <= d & d & d & d & d & d & d & d;
+    end if;
 end process;
 
 selector <=

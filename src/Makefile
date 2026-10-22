@@ -1,0 +1,69 @@
+# Command line build of the Spec256 core: the steps and options of the ISE 14.7 project navigator
+# (the .xise project of the board, its karabas_<board>.cmd_log), as karabas-go-core-tsconf does it.
+#
+#   make                 the boards of BOARDS (spec256.kg3 for now)
+#   make minig           one board: synthesis, implementation, bitstream, .kg file
+#   make minig-xst       one step: <board>-xst (.ngc), <board>-impl (.bin), <board>-core (.kg)
+#   make minig-report    LUTs, slices, block RAMs and the timing result of the last build
+#   make clean           the intermediate files (not the .bin / .kg files, they are in git)
+#
+# Inputs per board: karabas_<board>.prj (the source list), .xst, .ucf, .ut.
+# Only the Mini G is converted yet; the Mini and the Go still have their .xise projects
+# (on the old T80se64, see docs/SIMD.md).
+
+ISE_SETTINGS ?= /opt/Xilinx/14.7/ISE_DS/settings64.sh
+PART = xc6slx25-ftg256-2
+BOARDS = minig
+
+SHELL = /bin/bash
+.SHELLFLAGS = -e -o pipefail -c
+.NOTPARALLEL:
+# settings64.sh takes the arguments of the shell that sources it: none here
+XIL = source $(ISE_SETTINGS) > /dev/null;
+
+KG_minig = spec256.kg3
+JSON_minig = core_minig.json
+
+# map / par options of the .xise project (area strategy)
+MAP_T_minig = 1
+MAP_OPT_minig = -logic_opt off -ol high -xt 0 -register_duplication off -r 4 -global_opt off -mt off -ir off -pr b -lc area -power off
+PAR_OPT_minig = -ol high -mt off
+
+.PHONY: all clean $(BOARDS) $(BOARDS:=-xst) $(BOARDS:=-impl) $(BOARDS:=-core) $(BOARDS:=-report)
+
+all: $(BOARDS)
+
+define board
+SRC_$(1) := $$(shell sed -n 's/^[a-z]* work "\(.*\)"/\1/p' karabas_$(1).prj)
+
+karabas_$(1).ngc: karabas_$(1).prj karabas_$(1).xst $$(SRC_$(1))
+	mkdir -p xst/projnav.tmp
+	$(XIL) xst -intstyle ise -ifn karabas_$(1).xst -ofn karabas_$(1).syr
+
+karabas_$(1).bin: karabas_$(1).ngc karabas_$(1).ucf karabas_$(1).ut
+	$(XIL) ngdbuild -intstyle ise -dd _ngo -nt timestamp -uc karabas_$(1).ucf -p $(PART) karabas_$(1).ngc karabas_$(1).ngd
+	$(XIL) map -intstyle ise -p $(PART) -w $(MAP_OPT_$(1)) -t $(MAP_T_$(1)) -o karabas_$(1)_map.ncd karabas_$(1).ngd karabas_$(1).pcf
+	$(XIL) par -w -intstyle ise $(PAR_OPT_$(1)) karabas_$(1)_map.ncd karabas_$(1).ncd karabas_$(1).pcf
+	$(XIL) trce -intstyle ise -v 3 -s 2 -n 3 -fastpaths -xml karabas_$(1).twx karabas_$(1).ncd -o karabas_$(1).twr karabas_$(1).pcf -ucf karabas_$(1).ucf
+	$(XIL) bitgen -intstyle ise -f karabas_$(1).ut karabas_$(1).ncd
+
+$(KG_$(1)): karabas_$(1).bin $(JSON_$(1)) $$(wildcard roms/*)
+	python3 make_core.py $(JSON_$(1)) $$@
+
+$(1): $(KG_$(1))
+$(1)-xst: karabas_$(1).ngc
+$(1)-impl: karabas_$(1).bin
+$(1)-core: $(KG_$(1))
+$(1)-report:
+	@grep -E "Number of (Slice LUTs|occupied Slices|RAMB16BWERs|RAMB8BWERs):" karabas_$(1)_map.mrp
+	@grep -E "constraints? (was|were) met|constraints? not met|Timing Score" karabas_$(1).par | sort -u
+endef
+
+$(foreach b,$(BOARDS),$(eval $(call board,$(b))))
+
+clean:
+	rm -rf xst _ngo _xmsgs xlnx_auto_0_xdb
+	rm -f $(foreach b,$(BOARDS),$(addprefix karabas_$(b),.ngc .ngd .ngr .syr .lso .bld .pcf .ncd _map.ncd _map.ngm \
+		_map.map _map.mrp _map.xrpt .par .pad _pad.csv _pad.txt .twr .twx .unroutes .xpi .ptwx .bgn .bit .drc \
+		_bitgen.xwbt _summary.xml _usage.xml _xst.xrpt _ngdbuild.xrpt _par.xrpt _guide.ncd .cmd_log .stx \
+		_envsettings.html _summary.html))

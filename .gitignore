@@ -69,3 +69,8 @@ _xmsgs/
 
 # ghdl work library of src/sim
 src/sim/work/
+
+# inputs of the command line build (src/Makefile)
+!src/karabas_minig.prj
+!src/karabas_minig.xst
+!src/karabas_minig.ut
