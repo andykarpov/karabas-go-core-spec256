@@ -1,7 +1,7 @@
 {
     "id": "spec256",
     "name": "Spec256",
-    "build": "26102221",
+    "build": "26102223",
     "bitstream": "karabas_go.bin",
     "visible": true,
     "type": "osd",
