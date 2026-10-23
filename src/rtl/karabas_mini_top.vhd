@@ -271,9 +271,9 @@ MIDI_TX             <= '1';
 MIDI_CLK            <= '0';
 MIDI_RESET_N        <= '1';
 
-u_sdr_clk: ODDR2 -- negative DDR clock
+u_sdr_clk: ODDR2 -- SDR_CLK = clk_sdr (clk_bus at 180 degrees): rises in the middle of a clk_bus period
 generic map(DDR_ALIGNMENT => "NONE", INIT => '0', SRTYPE => "SYNC")
-port map(Q => SDR_CLK, C0 => clk_sdr, C1 => not(clk_sdr), CE => '1', D0 => '0', D1 => '1', R => '0', S => '0');
+port map(Q => SDR_CLK, C0 => clk_sdr, C1 => not(clk_sdr), CE => '1', D0 => '1', D1 => '0', R => '0', S => '0');
 
 end architecture;
 
