@@ -1,6 +1,7 @@
 // tb_sdram_bg: sdram_bg.v against a model of the SDRAM (CAS latency 2, burst 1). The SDRAM clock is
 // clk at 180 degrees (the ODDR2 of the top): commands are taken on the falling edge of clk, read data
-// is valid from tAC (5.4 ns) after the second SDRAM edge to tOH (2.7 ns) after the third.
+// is valid from tAC (6 ns, a -75 part) after the next SDRAM edge to tOH (2.7 ns) after the second one
+// (CAS latency 2), plus PADS ns of pads and traces each way.
 // Writes the bytes of two lines (a byte every 14 clocks, as the file loader with 32 MHz bursts), reads
 // both lines into the line buffer and checks every word; checks the timing rules of the commands
 // (tRCD, a READ or WRITE only to the open row, a refresh at least every 7.8 us).
@@ -9,6 +10,7 @@
 `timescale 1ns / 1ps
 module tb_sdram_bg;
 parameter real T = 17.778;         // 56.25 MHz
+parameter real PADS = 4.0;         // FPGA pads and traces: SDR_CLK out plus DQ in
 reg clk = 0, reset = 1;
 always #(T/2) clk = ~clk;
 
@@ -78,11 +80,13 @@ always @(negedge clk) begin : model
 	endcase
 end
 
-// data of a READ: valid from 2 SDRAM clocks + tAC to 3 SDRAM clocks + tOH (the value taken now)
+// data of a READ (CAS latency 2): valid from 1 SDRAM clock + tAC to 2 SDRAM clocks + tOH after the edge
+// that takes the READ, seen by the FPGA PADS ns later; X between two reads
 task read_out(input [15:0] d);
 	begin
-		dq_drive <= #(2*T + 5.4) d;
-		dq_drive <= #(3*T + 2.7) 16'bz;
+		dq_drive <= #(1*T + 2.7 + PADS) 16'bx;
+		dq_drive <= #(1*T + 6.0 + PADS) d;
+		dq_drive <= #(2*T + 2.7 + PADS) 16'bz;
 	end
 endtask
 

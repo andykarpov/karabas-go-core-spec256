@@ -13,8 +13,12 @@
    lb_data (lb_addr = {line_sel, word}); about 140 clocks;
  - AUTO REFRESH every REFRESH_CLOCKS clocks (8192 rows in 64 ms: 7.8 us).
  Byte address [23:0]: word = addr[23:1]: column [8:0], row [21:9], bank {0, word[22]}.
- RD_DELAY: the clocks from a READ command to the clock that takes its data (CAS latency 2, plus the
- half clock of SDR_CLK at 180 degrees and the delays of the pads).
+ Timing: SDR_CLK rises in the middle of a clk period, so the commands, the address and the write data
+ (from the IOB flip-flops on the rising edge of clk) have about half a period of setup and of hold at the
+ SDRAM. The data of a READ taken on SDRAM edge n is valid from tAC after edge n+1 to tOH after edge n+2
+ (CAS latency 2): around the falling edge of clk 2.5 periods after the READ, where dq_neg takes it
+ (6 ns of margin either side with tAC 6 ns of a -75 part and 4 ns of pads and traces).
+ RD_DELAY: the clocks from a READ command to the rising edge of clk that takes dq_neg.
 */
 module sdram_bg #(
 	parameter INIT_CLOCKS = 15'd12000,    // 213 us at 56.25 MHz
@@ -89,6 +93,10 @@ reg l_sel;
 reg [7:0] rd_n;                       // READs issued
 reg [RD_DELAY:0] rd_pipe = 0;         // a READ RD_DELAY clocks ago
 reg [6:0] lb_word = 7'd0;
+reg [15:0] dq_neg = 16'd0;            // sdr_dq on the falling edge of clk
+
+always @(negedge clk)
+	dq_neg <= sdr_dq;
 
 reg pop;
 assign f_pop = pop;
@@ -119,7 +127,7 @@ always @(posedge clk) begin
 	lb_we <= 1'b0;
 	if (rd_pipe[RD_DELAY-1]) begin
 		lb_we <= 1'b1;
-		lb_data <= sdr_dq;
+		lb_data <= dq_neg;
 		lb_addr <= {l_sel, lb_word};
 		lb_word <= lb_word + 1'd1;
 	end
