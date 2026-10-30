@@ -15,9 +15,9 @@ explains how it works.
 
 | Board | Core file | Video | Audio |
 |---|---|---|---|
-| Karabas Go | `spec256.kg1` | VGA, 640x480 60 Hz | I2S DAC (PCM5102), beeper pin |
-| Karabas Mini | `spec256.kg2` | HDMI, 640x480 60 Hz | HDMI, analog output (sigma-delta) |
-| Karabas Mini G | `spec256.kg3` | HDMI, 640x480 60 Hz | HDMI, I2S DAC |
+| Karabas Go | `spec256.kg1` | VGA, 720x576 50 Hz | I2S DAC (PCM5102), beeper pin |
+| Karabas Mini | `spec256.kg2` | HDMI, 720x576 50 Hz | HDMI, analog output (sigma-delta) |
+| Karabas Mini G | `spec256.kg3` | HDMI, 720x576 50 Hz | HDMI, I2S DAC |
 
 The core files are in `src/`. The Mini G core has been tested on the board; the Go and Mini cores
 are built the same way but not tested on their boards yet.
@@ -34,7 +34,7 @@ are built the same way but not tested on their boards yet.
 - **GFX 256** in the OSD switches between the 256-colour picture and the ordinary Spectrum picture
   at any time.
 - **Computer:** a Spectrum 48K, Z80 at 3.5 MHz, the 48K ROM. The frame interrupt comes from the
-  VGA frame (60 Hz), so games run a little faster than on a 50 Hz Spectrum.
+  video frame, 720x576 at 50 Hz, so games run at the speed of the Spectrum.
 - **Sound:** the beeper and an AY-3-8910 on the ports of the Spectrum 128 (#FFFD / #BFFD), stereo
   ABC, ACB or mono; the level meters of the board get the sound level.
 - **Input:** USB keyboard; two joysticks (the joysticks of the board or USB gamepads) as Kempston,

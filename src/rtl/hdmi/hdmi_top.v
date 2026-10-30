@@ -13,7 +13,7 @@
 */
 module hdmi_top #(
 	parameter SAMPLERATE = 44100,
-	parameter CLKRATE = 25000000    // the frequency of clk, Hz
+	parameter CLKRATE = 27000000    // the frequency of clk, Hz
 ) (
 	input wire clk,                 // VGA pixel clock
 	input wire reset,

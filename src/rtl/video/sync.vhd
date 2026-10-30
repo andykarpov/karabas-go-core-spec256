@@ -22,17 +22,19 @@ end entity;
 
 architecture rtl of sync is
 
--- ModeLine "640x480@60Hz"  25,175 640 656 752 800 480 490 492 525 -HSync -VSync
+-- karabas: CEA-861 720x576@50Hz (576p, VIC 17), 27 MHz: 864 x 625 = 50.00 Hz, so INT comes 50 times a second as
+-- on the Spectrum (640x480@60 gave 59.5 and games ran about 19 % fast)
+-- ModeLine "720x576@50Hz"  27,000 720 732 796 864 576 581 586 625 -HSync -VSync
 	-- Horizontal Timing constants  
-	constant h_pixels_across	: integer := 640 - 1;
-	constant h_sync_on		: integer := 656 - 1;
-	constant h_sync_off		: integer := 752 - 1;
-	constant h_end_count		: integer := 800 - 1;
+	constant h_pixels_across	: integer := 720 - 1;
+	constant h_sync_on		: integer := 732 - 1;
+	constant h_sync_off		: integer := 796 - 1;
+	constant h_end_count		: integer := 864 - 1;
 	-- Vertical Timing constants
-	constant v_pixels_down		: integer := 480 - 1;
-	constant v_sync_on		: integer := 490 - 1;
-	constant v_sync_off		: integer := 492 - 1;
-	constant v_end_count		: integer := 525 - 1;
+	constant v_pixels_down		: integer := 576 - 1;
+	constant v_sync_on		: integer := 581 - 1;
+	constant v_sync_off		: integer := 586 - 1;
+	constant v_end_count		: integer := 625 - 1;
 
 	signal hcnt			: std_logic_vector(9 downto 0) := "0000000000"; 	-- horizontal pixel counter
 	signal vcnt			: std_logic_vector(9 downto 0) := "0000000000"; 	-- vertical line counter

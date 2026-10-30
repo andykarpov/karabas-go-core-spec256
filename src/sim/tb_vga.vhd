@@ -196,9 +196,9 @@ begin
 	process
 	begin
 		pal_wr <= '1';
-		for i in 1 to G_FRAMES * 800 * 525 loop
-			clk <= '1'; wait for 20 ns;
-			clk <= '0'; pal_wr <= '0'; wait for 20 ns;
+		for i in 1 to G_FRAMES * 864 * 625 loop
+			clk <= '1'; wait for 18.5 ns;
+			clk <= '0'; pal_wr <= '0'; wait for 18.5 ns;
 		end loop;
 		done <= true;
 		wait;
@@ -218,12 +218,13 @@ begin
 		variable l : line;
 		variable c0, c1, c2, c3, c4, c5 : std_logic_vector(23 downto 0);
 		variable bg_px : integer := 0;
+		variable first_h, first_v, last_h, last_v : integer := -1;
 		constant WHITE : std_logic_vector(23 downto 0) := x"AAAAAA";  -- INK 7 without BRIGHT
 		constant BLUE  : std_logic_vector(23 downto 0) := x"0000AA";  -- PAPER 1
 	begin
 		wait until falling_edge(clk);
 		-- the first frame fills the pipelines
-		for i in 1 to 800 * 525 loop
+		for i in 1 to 864 * 625 loop
 			wait until falling_edge(clk);
 		end loop;
 		while not done loop
@@ -236,7 +237,13 @@ begin
 			c4 := r4 & g4 & b4;
 			c5 := r5 & g5 & b5;
 			if c4 /= c5 then errors := errors + 1; end if;
-			if c0 = WHITE or c0 = BLUE then bg_px := bg_px + 1; end if;
+			if c0 = WHITE or c0 = BLUE then
+				bg_px := bg_px + 1;
+				if first_h < 0 then
+					first_h := to_integer(unsigned(hcnt)); first_v := to_integer(unsigned(vcnt));
+				end if;
+				last_h := to_integer(unsigned(hcnt)); last_v := to_integer(unsigned(vcnt));
+			end if;
 			if c2 /= c0 then errors := errors + 1; end if;
 			if c0 = WHITE then
 				ink := ink + 1;
@@ -261,6 +268,15 @@ begin
 		write(l, string'("ink ") & integer'image(ink) & ", paper " & integer'image(paper) &
 			", border/blank " & integer'image(border));
 		writeline(output, l);
+		write(l, string'("screen from h ") & integer'image(first_h) & " v " & integer'image(first_v) &
+			" to h " & integer'image(last_h) & " v " & integer'image(last_v));
+		writeline(output, l);
+		-- the screen, 256 x 192 twice as large, once in every frame after the first
+		if ink + paper /= (G_FRAMES - 1) * 512 * 384 then
+			errors := errors + 1;
+			write(l, string'("the screen is not 512 x 384 pixels a frame"));
+			writeline(output, l);
+		end if;
 		if ink = 0 or paper = 0 then
 			errors := errors + 1;
 			write(l, string'("no ink or no paper pixels: the screen is not shown"));

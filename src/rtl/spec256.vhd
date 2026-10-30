@@ -314,7 +314,7 @@ signal sdram_rdy     : std_logic := '0';
 
 begin
 
--- PLL: 50 MHz -> 56.25 MHz (the CPU, SRAM, MCU link), the same at 180 degrees, 25 MHz (VGA);
+-- PLL: 50 MHz -> 56.25 MHz (the CPU, SRAM, MCU link), the same at 180 degrees, 27 MHz (video, 576p50);
 -- VCO 675 MHz, phase 0: the clocks are related (karabas-go-modules kg_pll: IBUFG, PLL_BASE, BUFG)
 U1: entity work.kg_pll
 generic map (
@@ -323,7 +323,7 @@ generic map (
     CLKOUT0_DIVIDE      => 12,    -- 56.25
     CLKOUT1_DIVIDE      => 12,    -- 56.25 @ 180
     CLKOUT1_PHASE       => 180.0,
-    CLKOUT2_DIVIDE      => 27,    -- 25.00
+    CLKOUT2_DIVIDE      => 25,    -- 27.00
     CLKOUT3_DIVIDE      => 27,    -- not used
     CLKOUT4_DIVIDE      => 27,
     CLKOUT5_DIVIDE      => 27,
@@ -723,8 +723,8 @@ vga_rgb_core <= vga_r & vga_g & vga_b;
 
 U12: entity work.kg_osd_overlay
 generic map (
-    H_OFFSET            => 48,
-    V_OFFSET            => 40
+    H_OFFSET            => 78,    -- the window (512 x 416) in the middle of 720x576
+    V_OFFSET            => 60
 )
 port map (
     clk                 => clk_vga,

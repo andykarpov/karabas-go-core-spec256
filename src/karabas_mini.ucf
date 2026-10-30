@@ -224,7 +224,7 @@ NET "FLASH_HOLD_N"  LOC="P12"  | IOSTANDARD = LVCMOS33; # CONF_IO3
 #   CLKOUT0 56.25 MHz clk_bus: the CPU (T80se_S256, CLKEN 3.5 MHz), the SRAM controller, the MCU link, the
 #                     soft switches, the loaders, the VRAM write ports
 #   CLKOUT1 56.25 MHz at 180 degrees: the ODDR2 of SDR_CLK (the SDRAM of the backgrounds, sdram_bg.v)
-#   CLKOUT2 25.00 MHz clk_vga: sync, vga_spec256, the OSD, the VRAM read ports; hdmi_pll (DCM_SP) makes the
+#   CLKOUT2 27.00 MHz clk_vga (576p50): sync, vga_spec256, the OSD, the VRAM read ports; hdmi_pll (DCM_SP) makes the
 #                     pixel clock (CLK0, phase aligned) and the 5x serial clocks from it
 # The PERIOD of CLK_50MHZ is derived onto every PLL and DCM output.
 NET "CLK_50MHZ" TNM_NET = "CLK_50MHZ";
@@ -250,13 +250,13 @@ TIMESPEC "TS_CLK_MCU" = PERIOD "TG_CLK_MCU" 32 MHz;
 TIMESPEC "TS_MCU_TO_BUS" = FROM "TG_CLK_MCU" TO "TG_CLK_BUS" 31.25 ns DATAPATHONLY;
 TIMESPEC "TS_BUS_TO_MCU" = FROM "TG_CLK_BUS" TO "TG_CLK_MCU" 31.25 ns DATAPATHONLY;
 
-# clk_bus -> clk_vga / the pixel clock: 56.25 and 25 MHz from one VCO, their nearest edges 2.2 ns apart. The
+# clk_bus -> clk_vga / the pixel clock: 56.25 and 27 MHz from one VCO, their nearest edges 1.5 ns apart. The
 # design does not rely on that phase: what crosses goes into two flip-flops (sync_int back to clk_bus, the
 # OSD command, the audio of hdmi_top) or is a static setting read on every pixel (the border, the GFX 256
 # mode). The VRAMs are block RAMs with a port on each clock. The data paths are bounded by one clk_vga period.
-TIMESPEC "TS_BUS_TO_VGA" = FROM "TG_CLK_BUS" TO "TG_CLK_VGA" 40 ns DATAPATHONLY;
+TIMESPEC "TS_BUS_TO_VGA" = FROM "TG_CLK_BUS" TO "TG_CLK_VGA" 37 ns DATAPATHONLY;
 TIMESPEC "TS_VGA_TO_BUS" = FROM "TG_CLK_VGA" TO "TG_CLK_BUS" 17.7 ns DATAPATHONLY;
-TIMESPEC "TS_BUS_TO_PIX" = FROM "TG_CLK_BUS" TO "TG_CLK_PIX" 40 ns DATAPATHONLY;
+TIMESPEC "TS_BUS_TO_PIX" = FROM "TG_CLK_BUS" TO "TG_CLK_PIX" 37 ns DATAPATHONLY;
 
 # the clock inputs of this board are not on global clock pins
 NET "CLK_50MHZ" CLOCK_DEDICATED_ROUTE = FALSE;
