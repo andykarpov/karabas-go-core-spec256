@@ -198,7 +198,7 @@ port map(
 U2: entity work.hdmi_top
 generic map(
     SAMPLERATE        => 44100,
-    CLKRATE           => 25000000
+    CLKRATE           => 27000000
 )
 port map(
     clk               => clk_vga,

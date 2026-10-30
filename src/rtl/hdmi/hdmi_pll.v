@@ -7,7 +7,7 @@
 */
 
 module hdmi_pll(
-	input wire clk, // 25.2
+	input wire clk, // 27
 	input wire reset,
 	output wire clk_hdmi, // x5
 	output wire clk_hdmi_n, // x5 180deg
@@ -19,7 +19,7 @@ module hdmi_pll(
 );
 
 // freq counter
-wire [7:0] hdmi_freq = 25;
+wire [7:0] hdmi_freq = 27;
 assign freq = hdmi_freq;
 
 // pll resetter
@@ -39,7 +39,7 @@ DCM_SP
     .CLKFX_DIVIDE          (1),
     .CLKFX_MULTIPLY        (5),
     .CLKIN_DIVIDE_BY_2     ("FALSE"),
-    .CLKIN_PERIOD          (40.000), // 25 MHz (the PLL of spec256.vhd: 675 / 27)
+    .CLKIN_PERIOD          (37.037), // 27 MHz (the PLL of spec256.vhd: 675 / 25)
     .CLKOUT_PHASE_SHIFT    ("NONE"),
     .CLK_FEEDBACK          ("1X"),
     .DESKEW_ADJUST         ("SYSTEM_SYNCHRONOUS"),

@@ -96,12 +96,14 @@ architecture rtl of vga_spec256 is
 	signal show_bg		: std_logic;
 
 -- ZX-Spectum screen
-	constant spec_border_left	: natural :=  32;	-- (640 - (spec_screen_h *2)) / 2 
+	-- the screen twice as large in the middle of 720x576 (sync.vhd): 104 pixels on each side, the
+	-- counter starts 16 clocks before the pixels leave the pipeline
+	constant spec_border_left	: natural :=  44;	-- ((720 - (spec_screen_h * 2)) / 2 - 16) / 2
 	constant spec_screen_h		: natural := 256;	-- Spectrum Screen h = 256 pixels
 
-	constant spec_border_top	: natural :=  24;	-- (640 - (spec_screen_v * 2)) / 2
+	constant spec_border_top	: natural :=  48;	-- (576 - (spec_screen_v * 2)) / 4
 	constant spec_screen_v		: natural := 192;	-- Spectrum Screen v = 192 pixels
-	constant h_sync_on		: integer := 575;	-- (spec_screen_h * 2) + (spec_border_left * 2) - 1
+	constant h_sync_on		: integer := 599;	-- (spec_screen_h * 2) + (spec_border_left * 2) - 1
 	constant v_sync_on		: integer := 240;	
 
 	signal spec_h_count_reg		: std_logic_vector(9 downto 0);
