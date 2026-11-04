@@ -83,3 +83,4 @@ src/sim/work/
 
 # ISim build of src/sim
 src/sim/build_load/
+src/kg_*.stamp

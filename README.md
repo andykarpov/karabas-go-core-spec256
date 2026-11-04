@@ -15,9 +15,9 @@ explains how it works.
 
 | Board | Core file | Video | Audio |
 |---|---|---|---|
-| Karabas Go | `spec256.kg1` | VGA, 720x576 50 Hz | I2S DAC (PCM5102), beeper pin |
-| Karabas Mini | `spec256.kg2` | HDMI, 720x576 50 Hz | HDMI, analog output (sigma-delta) |
-| Karabas Mini G | `spec256.kg3` | HDMI, 720x576 50 Hz | HDMI, I2S DAC |
+| Karabas Go | `spec256.kg` | VGA, 720x576 50 Hz | I2S DAC (PCM5102), beeper pin |
+| Karabas Mini | `spec256.kg` | HDMI, 720x576 50 Hz | HDMI, analog output (sigma-delta) |
+| Karabas Mini G | `spec256.kg` | HDMI, 720x576 50 Hz | HDMI, I2S DAC |
 
 The core files are in `src/`. The Mini G core has been tested on the board; the Go and Mini cores
 are built the same way but not tested on their boards yet.
@@ -47,7 +47,7 @@ Not there yet:
 
 ## Getting started
 
-1. Copy `spec256.kg1` (Go), `spec256.kg2` (Mini) or `spec256.kg3` (Mini G) to the root of the SD
+1. Copy `spec256.kg` (one file for Go, Mini and Mini G) to the root of the SD
    card of the board.
 2. Put `.256` games on the SD card (two are in `src/games`, see [Games](#games) to make more).
 3. Choose Spec256 in the core menu. The Spectrum starts with its ROM.
