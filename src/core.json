@@ -1,7 +1,7 @@
 {
     "id": "spec256",
     "name": "Spec256",
-    "build": "26103101",
+    "build": "26110801",
     "visible": true,
     "type": "osd",
     "order": 10,
@@ -26,7 +26,7 @@
     {"type": "S", "name": "Colour 0/FF", "options": ["Auto", "Attr", "Palette", "Pixel"], "default": 0, "hotkey": "Menu+C"},
     {"type": "S", "name": "AY mode", "options": ["ABC", "ACB", "Mono"], "default": 0, "hotkey": "Menu+A"},
     {"type": "N", "name": "Pause", "options": ["Off", "On"], "default": 0, "hotkey": "Menu+P"},
-    {"type": "T", "name": "NMI", "hotkey": "Menu+F12"},
-    {"type": "T", "name": "Reset", "hotkey": "Ctrl+Alt+Del"}
+    {"type": "T", "name": "NMI", "hotkey": "F11"},
+    {"type": "T", "name": "Reset", "hotkey": "F12"}
     ]
 }
