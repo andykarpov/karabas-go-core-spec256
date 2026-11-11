@@ -237,20 +237,22 @@ signal s_bk_over_ff  : std_logic := '0';
 signal bg_count      : std_logic_vector(7 downto 0) := (others => '0');
 signal bg_on         : std_logic := '0';
 signal bg_cur        : std_logic_vector(7 downto 0) := (others => '0');
-signal bg_first      : std_logic_vector(7 downto 0) := (others => '0');
-signal bg_mask       : std_logic_vector(15 downto 0) := (others => '0');
+signal bg_none       : std_logic;                               -- no background (a rule says so)
+signal bg_show       : std_logic;
+signal tail_base     : std_logic_vector(31 downto 0) := (others => '0');  -- offset of the block of the rules
 signal bg_base       : std_logic_vector(31 downto 0) := (others => '0');  -- offset of the backgrounds in the extension
 signal bg_wr         : std_logic := '0';
 signal bg_wr_a       : std_logic_vector(23 downto 0) := (others => '0');
 signal bg_wr_d       : std_logic_vector(7 downto 0) := (others => '0');
 signal bg_wr_n       : std_logic_vector(7 downto 0) := (others => '0');
 signal bg_wr_off     : std_logic_vector(15 downto 0) := (others => '0');
-type rule8_t is array (0 to 15) of std_logic_vector(7 downto 0);
-type rule16_t is array (0 to 15) of std_logic_vector(15 downto 0);
-signal rule_bg       : rule8_t := (others => x"FF");
-signal rule_val      : rule8_t := (others => x"00");
-signal rule_addr     : rule16_t := (others => x"0000");
-signal rule_m        : std_logic_vector(15 downto 0) := (others => '0');
+-- the rules of the backgrounds (bg_rules): written as the block of the rules of the .256
+signal rl_init       : std_logic := '0';
+signal rl_we         : std_logic := '0';
+signal rl_a          : std_logic_vector(7 downto 0) := (others => '0');
+signal rl_d          : std_logic_vector(7 downto 0) := (others => '0');
+signal rl_flags      : std_logic_vector(7 downto 0);
+signal rl_wr         : std_logic;
 signal vga_bg_req    : std_logic;
 signal vga_bg_y      : std_logic_vector(7 downto 0);
 signal bg_req_s      : std_logic_vector(2 downto 0) := "000";
@@ -399,7 +401,8 @@ port map (
     I_HIDE_SAME         => s_hide_same,
     I_UP_MIXED          => s_up_mixed,
     I_DOWN_MIXED        => s_down_mixed,
-    I_BG_ON             => bg_on,
+    I_BG_ON             => bg_show,
+    I_DOS               => rl_flags(0),
     I_BK_OVER_FF        => s_bk_over_ff,
     I_LB_CLK            => clk_sdram,
     I_LB_WE             => lb_we,
@@ -467,27 +470,26 @@ begin
     end if;
 end process;
 
--- the background shown: the first rule whose byte matches (watched on the writes of the CPU and of the
--- loader), else the one before
-process (clk_sdram)
-begin
-    if rising_edge(clk_sdram) then
-        for i in 0 to 15 loop
-            if fileloader_act = '0' and cpu_mreq_n = '0' and cpu_wr_n = '0' and cpu_addr = rule_addr(i) then
-                if cpu_do = rule_val(i) then rule_m(i) <= '1'; else rule_m(i) <= '0'; end if;
-            end if;
-        end loop;
-        for i in 15 downto 0 loop
-            if rule_m(i) = '1' and rule_bg(i) /= x"FF" then
-                bg_cur <= rule_bg(i);
-            end if;
-        end loop;
-        if fileloader_act = '1' then
-            bg_cur <= bg_first;
-            rule_m <= bg_mask;
-        end if;
-    end if;
-end process;
+-- the background shown: the rules of the game (bg_rules) on the writes of the CPU; none while a file loads
+rl_wr <= '1' when fileloader_act = '0' and cpu_mreq_n = '0' and cpu_wr_n = '0' else '0';
+
+U_BG_RULES: entity work.bg_rules
+port map (
+    I_CLK               => clk_sdram,
+    I_INIT              => rl_init,
+    I_LOAD              => fileloader_act,
+    I_CFG_WE            => rl_we,
+    I_CFG_A             => rl_a,
+    I_CFG_D             => rl_d,
+    I_WR                => rl_wr,
+    I_WR_A              => cpu_addr,
+    I_WR_D              => cpu_do,
+    O_FLAGS             => rl_flags,
+    O_BG                => bg_cur,
+    O_NONE              => bg_none
+);
+
+bg_show <= bg_on and not bg_none;
      
 -- #7FFD and the banks: #30 on a reset (ROM 1, banks 5, 2, 0, locked: a 48K game as on the 48K); while a
 -- file loads, p7ffd_load: #30 for the RAM of 4000-FFFF (banks 5, 2, 0), then the value of a 128K snapshot,
@@ -929,16 +931,21 @@ VGA_BLANK      <= sync_blank;
 process (clk_sdram)
     variable t : std_logic_vector(31 downto 0);   -- the offset in the extension
     variable u : std_logic_vector(31 downto 0);   -- the offset in the ROM planes
+    variable v : std_logic_vector(31 downto 0);
+    variable n : integer range 0 to 15;
 begin
     if rising_edge(clk_sdram) then
          fileloader_wr64 <= '0';
          fileloader_wr8 <= '0';
          pal_wr <= '0';
          bg_wr <= '0';
+         rl_init <= '0';
+         rl_we <= '0';
          
          prev_fileloader_act <= fileloader_act;
          if (fileloader_act = '1' and prev_fileloader_act = '0') then -- start of file loader
             regs_wr <= '0';
+            rl_init <= '1';
             fileloader_sna <= '1';
             fileloader_gfx <= '0';
             fileloader_rom <= '0';
@@ -963,12 +970,9 @@ begin
             s_bk_over_ff <= '0';
             bg_on <= '0';
             bg_count <= (others => '0');
-            bg_first <= (others => '0');
-            bg_mask <= (others => '0');
             tbl_pages <= (others => '0');
             bg_wr_n <= (others => '0');
             bg_wr_off <= (others => '0');
-            rule_bg <= (others => x"FF");
          end if;
          if (fileloader_act = '0' and prev_fileloader_act = '1') then -- end of file loader
             regs_wr <= '0';
@@ -1025,9 +1029,9 @@ begin
                     when 6 => ext_hdr(15 downto 8) <= fileloader_do;
                     when 7 => ext_hdr(23 downto 16) <= fileloader_do;
                     when 8 => bg_count <= fileloader_do;
-                    when 10 => bg_first <= fileloader_do;
-                    when 11 => bg_mask(7 downto 0) <= fileloader_do;
-                    when 12 => bg_mask(15 downto 8) <= fileloader_do;
+                    when 10 => rl_we <= ext_magic; rl_a <= x"99"; rl_d <= fileloader_do;    -- at the start (153)
+                    when 11 => rl_we <= ext_magic; rl_a <= x"02"; rl_d <= fileloader_do;    -- the bits that hold
+                    when 12 => rl_we <= ext_magic; rl_a <= x"03"; rl_d <= fileloader_do;
                     when 13 => tbl_pages(7 downto 0) <= fileloader_do;
                     when 14 => tbl_pages(15 downto 8) <= fileloader_do;
                     when 15 =>
@@ -1044,12 +1048,19 @@ begin
                             bg_on <= '0';
                             if bg_count /= x"00" then bg_on <= sdram_ready; end if;
                             if ext_hdr(0) = '1' and ext_hdr(4) = '1' then
-                                bg_base <= std_logic_vector(to_unsigned(848 + 2 * 131072, 32));
+                                v := std_logic_vector(to_unsigned(848 + 2 * 131072, 32));
                             elsif ext_hdr(0) = '1' then
-                                bg_base <= std_logic_vector(to_unsigned(848 + 131072, 32));
+                                v := std_logic_vector(to_unsigned(848 + 131072, 32));
                             else
-                                bg_base <= std_logic_vector(to_unsigned(848, 32));
+                                v := std_logic_vector(to_unsigned(848, 32));
                             end if;
+                            bg_base <= v;
+                            -- the block of the rules: after the backgrounds (49152 bytes each) and the 128K block
+                            v := v + std_logic_vector(to_unsigned(to_integer(unsigned(bg_count)) * 49152, 32));
+                            if ext_hdr(5) = '1' then
+                                v := v + std_logic_vector(to_unsigned(8 + 5 * 147456, 32));
+                            end if;
+                            tail_base <= v;
                         end if;
                     when others => null;
                 end case;
@@ -1072,13 +1083,25 @@ begin
             -- the rules of the backgrounds: background, address (low, high), value
             elsif t < 848 then
                 if ext_magic = '1' then
+                    -- rule n of the header: its background into rule n, the address and the value into
+                    -- condition n (bg_rules: 72 + 4n, 4 + 4n, 7 + 4n)
+                    rl_we <= '1';
+                    rl_d <= fileloader_do;
+                    n := to_integer(unsigned(t(5 downto 2)) - 4) mod 16;
                     case t(1 downto 0) is   -- 784 is a multiple of 4
-                        when "00" => rule_bg(to_integer(unsigned(t(5 downto 2)) - 4) mod 16) <= fileloader_do;
-                        when "01" => rule_addr(to_integer(unsigned(t(5 downto 2)) - 4) mod 16)(7 downto 0) <= fileloader_do;
-                        when "10" => rule_addr(to_integer(unsigned(t(5 downto 2)) - 4) mod 16)(15 downto 8) <= fileloader_do;
-                        when others => rule_val(to_integer(unsigned(t(5 downto 2)) - 4) mod 16) <= fileloader_do;
+                        when "00" => rl_a <= std_logic_vector(to_unsigned(72 + 4 * n, 8));
+                        when "01" => rl_a <= std_logic_vector(to_unsigned(4 + 4 * n, 8));
+                        when "10" => rl_a <= std_logic_vector(to_unsigned(5 + 4 * n, 8));
+                        when others => rl_a <= std_logic_vector(to_unsigned(7 + 4 * n, 8));
                     end case;
                 end if;
+
+            -- the block of the rules (flag 6), 160 bytes after everything else, into bg_rules
+            elsif ext_magic = '1' and ext_hdr(6) = '1' and t >= tail_base and t - tail_base < 160 then
+                fileloader_rom <= '0';
+                rl_we <= '1';
+                rl_a <= t(7 downto 0) - tail_base(7 downto 0);
+                rl_d <= fileloader_do;
 
             -- the backgrounds: 49152 bytes each, into the SDRAM at n * 65536 + y * 256 + x
             elsif t >= bg_base and ext_magic = '1' and bg_wr_n < bg_count then
