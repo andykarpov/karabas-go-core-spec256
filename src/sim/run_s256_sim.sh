@@ -38,4 +38,12 @@ out=$(ghdl -r $FLAGS tb_s256 -gG_FILE256=$WORK/table.256 -gG_ROM=$WORK/table.rom
 	| grep -v "std_logic_arith.vhdl\|NUMERIC_STD\|^$" || true)
 echo "$out"
 echo "$out" | grep -q "tb_s256: 0 errors" || fail=1
+python3 gen_mono.py $WORK/mono.rom $WORK/mono.256
+for m in true false; do
+	echo "==== ARITH_MONO $m (the A of the main CPU after arithmetic), 2000 clocks"
+	out=$(ghdl -r $FLAGS tb_s256 -gG_FILE256=$WORK/mono.256 -gG_ROM=$WORK/mono.rom -gG_NATURAL=false -gG_MONO=true -gG_ARITH_MONO=$m -gG_CYCLES=2000 2>&1 \
+		| grep -v "std_logic_arith.vhdl\|NUMERIC_STD\|^$" || true)
+	echo "$out"
+	echo "$out" | grep -q "tb_s256: 0 errors" || fail=1
+done
 [ $fail = 0 ] && echo "==== all passed" || { echo "==== FAILED"; exit 1; }

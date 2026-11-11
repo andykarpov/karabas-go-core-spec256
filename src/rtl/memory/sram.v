@@ -22,6 +22,20 @@ module sram(
 	 input wire  [127:0]    lane_a,
 	 input wire             lane_en,
 	 input wire  [23:0]     lane_pages,   // the pages of the tables of reversed bytes (the .256), 0: none
+	 // karabas: the read windows of the game (the block of the windows of the .256, up to 8): a read of
+	 // data (not M1) whose page a[15:8] is in [first, last] of a window, with the opcode (the last byte
+	 // read in an M1 cycle: xx of CB xx / ED xx, CB of DD CB d xx) passing its filter
+	 // ((op ^ value) & mask) == 0 (inverted with negate), hits; the first window that hits wins. On a
+	 // hit each lane with lane_en reads at its own address when the 8 differ (any page of the RAM: the
+	 // bank of its 16K window, 4000 bank 5, 8000 bank 2, C000 top_bank) and every plane byte is XORed with
+	 // the xor of the window. Spec256 DOS v1.2 reads so (synthetic readers of SPEC256.EXE) in Knight Lore,
+	 // Sabre Wulf, Underwurlde; Head over Heels, Scooby-Doo, Bubbler, Mad Mix 2 need it in theirs.
+	 input wire             m1,           // the read is an M1 cycle (an opcode)
+	 input wire  [2:0]      top_bank,     // the bank at C000 (#7FFD bits 2..0)
+	 input wire             win_we,       // a window from the loader: {xor, negate, mask, value, last,
+	 input wire  [2:0]      win_wa,       // first}; windows 0..win_cnt-1 are in use
+	 input wire  [40:0]     win_wd,
+	 input wire  [3:0]      win_cnt,
 	 output wire            cpu_ena,
 
     output reg  [20:0]     sram_a = 0,
@@ -74,6 +88,23 @@ reg [3:0] lp;
 // the word read is not coloured: every plane is the main byte (taken with the last 16 bits of the word,
 // before the bytes of the lanes replace planes in do)
 reg natural;
+// the windows: distributed RAM, one window looked at per clock while the word of a is read
+reg [40:0] win [0:7];
+always @(posedge clk) if (win_we) win[win_wa] <= win_wd;
+reg [3:0] wi;          // the window looked at
+reg wHit;              // a window hit
+reg [7:0] wX;          // its xor
+reg rdM1;              // the read is an opcode
+reg [7:0] op;          // the last opcode
+wire [40:0] w = win[wi[2:0]];
+wire [7:0] w_first = w[7:0], w_last = w[15:8], w_val = w[23:16], w_mask = w[31:24];
+wire w_match = !rdM1 && !wHit && wi < win_cnt && aD[15:8] >= w_first && aD[15:8] <= w_last &&
+	((((op ^ w_val) & w_mask) == 8'h00) ^ w[32]);
+wire [15:0] la_cur = laD[16*lp[2:0] +: 16];
+// the bank of the 16K window of the lane address (a lane address in the ROM is a: lane_a of spec256.vhd)
+wire [3:0] la_bank = la_cur[15:14] == 2'b01 ? 4'd5 : la_cur[15:14] == 2'b10 ? 4'd2 : {1'b0, top_bank};
+wire la_table = la_cur != aD && la_cur[15:8] == aD[15:8] && natural && !laUni && table_page;
+wire la_win = wHit && la_cur != aD && !laUni;
 
 reg [3:0] en = 0;
 always @(posedge clk, posedge reset)
@@ -100,6 +131,12 @@ begin
 
 		  prev_rd <= rd;
 		  prev_wr <= wr;
+
+		  if (w_match) begin
+				wHit <= 1'b1;
+				wX <= w[40:33];
+		  end
+		  if (!wi[3]) wi <= wi + 1'd1;
 
         // state machine
         case (state)
@@ -137,6 +174,10 @@ begin
                     laEn <= lane_en;
                     laUni <= lane_a[127:16] == {7{lane_a[15:0]}};
                     lp <= 0;
+                    rdM1 <= m1;
+                    wi <= 0;
+                    wHit <= 1'b0;
+                    wX <= 8'h00;
                     state <= S_READ1;
                 end                
             end
@@ -199,7 +240,9 @@ begin
                 do[71:56] <= sram_d;
                 natural <= {sram_d, do[55:8]} == {8{do[7:0]}};
                 sram_rd_n <= 2'b11;
-                if (laEn)
+                if (rdM1)
+                    op <= do[7:0];
+                if (laEn || wHit)
                     state <= S_LANE;
                 else begin
                     do_rdy <= 1;
@@ -210,14 +253,18 @@ begin
             // the lanes with an address of their own: word {address, 1 + p/2}, byte p%2
             S_LANE: begin
                 if (lp[3]) begin
+                    do[71:8] <= do[71:8] ^ {8{wX}};
                     do_rdy <= 1;
                     state <= S_IDLE;
                 end
-                else if (laD[16*lp[2:0] +: 16] != aD && laD[16*lp[2:0] + 8 +: 8] == aD[15:8] && natural && !laUni && table_page) begin
-                    sram_a <= {bD, laD[16*lp[2:0] +: 14], 3'b001 + lp[2:1]};   // the page of a: the bank of a
+                else if (laEn && (la_table || la_win)) begin
+                    // a table: the page of a, the bank of a; a window: the bank of the lane address
+                    sram_a <= {la_table ? bD : la_bank, la_cur[13:0], 3'b001 + lp[2:1]};
                     sram_rd_n <= 2'b00;
                     state <= S_LANE_DONE;
                 end
+                else if (!laEn)
+                    lp <= 4'd8;   // a window hit without lane addresses: only the xor
                 else
                     lp <= lp + 1'd1;
             end

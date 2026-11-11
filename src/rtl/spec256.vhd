@@ -260,6 +260,15 @@ signal bg_line_req   : std_logic := '0';
 signal bg_line_y     : std_logic_vector(7 downto 0) := (others => '0');
 signal bg_line_addr  : std_logic_vector(23 downto 0);
 signal tbl_pages     : std_logic_vector(23 downto 0) := (others => '0');  -- pages of the tables of reversed bytes
+-- the read windows of the game (flag 7: the block of the windows, after the block of the rules), into sram.v
+signal win_base      : std_logic_vector(31 downto 0) := (others => '0');
+signal win_we        : std_logic := '0';
+signal win_wa        : std_logic_vector(2 downto 0) := (others => '0');
+signal win_wd        : std_logic_vector(40 downto 0) := (others => '0');
+signal win_cnt       : std_logic_vector(3 downto 0) := (others => '0');
+signal win_buf       : std_logic_vector(39 downto 0) := (others => '0');
+signal win_k         : integer range 0 to 5 := 0;
+signal cpu_m1        : std_logic;
 signal sdram_ready   : std_logic;
 signal lb_we         : std_logic;
 signal lb_a          : std_logic_vector(7 downto 0);
@@ -374,6 +383,7 @@ port map (
     IR_O                => open,
     PC_O                => open,
     INST                => cpu_inst,
+    ARITH_MONO          => rl_flags(1),   -- the block of the rules: the lanes take A after arithmetic
     GDI                 => cpu_gfx_di,
     GDO                 => cpu_gfx_do,
     GREG                => open,
@@ -526,6 +536,12 @@ port map (
     lane_a              => lane_a,
     lane_en             => lane_en,
     lane_pages          => tbl_pages,
+    m1                  => cpu_m1,
+    top_bank            => p7ffd(2 downto 0),
+    win_we              => win_we,
+    win_wa              => win_wa,
+    win_wd              => win_wd,
+    win_cnt             => win_cnt,
     a                   => sdram_addr(15 downto 0),
     bank                => sdram_bank,
     di                  => sdram_di,
@@ -758,19 +774,21 @@ begin
 end process;
 
 -- no CPU clock in the clock after the snapshot registers are loaded (DIRSet): every register of the CPU
--- then changes at most every 2 clocks, the multicycle constraint TS_CPU of the ucf
+-- then changes at most every 2 clocks, the multicycle constraint TS_CPU of the ucf. OSD Pause holds the
+-- CPU (no CLKEN; a bus cycle in progress stays on the bus, its write repeats the same byte) and mutes it
 process (clk_sdram)
 begin
     if rising_edge(clk_sdram) then
         regs_wr_d <= regs_wr;
     end if;
 end process;
-cpu_clken      <= cpu_ena and not regs_wr_d;
+cpu_clken      <= cpu_ena and not regs_wr_d and not kb_pause;
 
 reset          <= areset or kb_reset;                        -- горячий сброс
 cpu_reset_n    <= not(reset) and not(mcu_busy) and not(romloader_act) and not(fileloader_act); -- CPU сброс
 inta_n         <= cpu_iorq_n or cpu_m1_n;              -- inta_n
 cpu_nmi_n      <= not kb_nmi;                          -- NMI
+cpu_m1         <= not cpu_m1_n;
 
 vram_wr         <= fileloader_wr8 when fileloader_act = '1' and fileloader_sna = '1' and fileloader_a8(15 downto 13) = "010" else
                         '1' when (cpu_mreq_n = '0' and cpu_wr_n = '0' and pg_bank = "0101" and cpu_addr(13) = '0') else 
@@ -891,8 +909,13 @@ begin
         beep := (others => '0');
         if port_xxfe_reg(4) = '1' then beep := beep + 384; end if;
         if port_xxfe_reg(3) = '1' then beep := beep + 96; end if;
-        mix_l <= l + beep;
-        mix_r <= r + beep;
+        if kb_pause = '1' then
+            mix_l <= (others => '0');
+            mix_r <= (others => '0');
+        else
+            mix_l <= l + beep;
+            mix_r <= r + beep;
+        end if;
     end if;
 end process;
 
@@ -941,6 +964,10 @@ begin
          bg_wr <= '0';
          rl_init <= '0';
          rl_we <= '0';
+         win_we <= '0';
+         if win_we = '1' then
+            win_wa <= win_wa + 1;   -- the next window
+         end if;
          
          prev_fileloader_act <= fileloader_act;
          if (fileloader_act = '1' and prev_fileloader_act = '0') then -- start of file loader
@@ -971,6 +998,9 @@ begin
             bg_on <= '0';
             bg_count <= (others => '0');
             tbl_pages <= (others => '0');
+            win_cnt <= (others => '0');
+            win_wa <= (others => '0');
+            win_k <= 0;
             bg_wr_n <= (others => '0');
             bg_wr_off <= (others => '0');
          end if;
@@ -1061,6 +1091,10 @@ begin
                                 v := v + std_logic_vector(to_unsigned(8 + 5 * 147456, 32));
                             end if;
                             tail_base <= v;
+                            if ext_hdr(6) = '1' then
+                                v := v + 160;
+                            end if;
+                            win_base <= v;
                         end if;
                     when others => null;
                 end case;
@@ -1102,6 +1136,29 @@ begin
                 rl_we <= '1';
                 rl_a <= t(7 downto 0) - tail_base(7 downto 0);
                 rl_d <= fileloader_do;
+
+            -- the block of the windows (flag 7), 64 bytes after the block of the rules: the number of the
+            -- windows (up to 8), 7 reserved, 8 windows of 6 bytes (first page, last page, opcode value,
+            -- opcode mask, flags: bit 0 negate, xor), 8 reserved
+            elsif ext_magic = '1' and ext_hdr(7) = '1' and t >= win_base and t - win_base < 64 then
+                fileloader_rom <= '0';
+                v := t - win_base;
+                if v(5 downto 0) = "000000" then
+                    if fileloader_do(7 downto 3) = "00000" then
+                        win_cnt <= fileloader_do(3 downto 0);
+                    else
+                        win_cnt <= "1000";
+                    end if;
+                elsif v(5 downto 3) /= "000" and v(5 downto 3) /= "111" then
+                    if win_k = 5 then
+                        win_we <= '1';
+                        win_wd <= fileloader_do & win_buf(32) & win_buf(31 downto 0);
+                        win_k <= 0;
+                    else
+                        win_buf <= fileloader_do & win_buf(39 downto 8);
+                        win_k <= win_k + 1;
+                    end if;
+                end if;
 
             -- the backgrounds: 49152 bytes each, into the SDRAM at n * 65536 + y * 256 + x
             elsif t >= bg_base and ext_magic = '1' and bg_wr_n < bg_count then

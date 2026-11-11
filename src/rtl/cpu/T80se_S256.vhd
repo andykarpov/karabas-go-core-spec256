@@ -114,7 +114,8 @@ entity T80se_S256 is
         GDO             : out std_logic_vector(LANES*8-1 downto 0);
         GREG            : out std_logic_vector(LANES*212-1 downto 0);
         GA              : out std_logic_vector(LANES*16-1 downto 0);   -- see T80_S256
-        GA_EN           : out std_logic
+        GA_EN           : out std_logic;
+        ARITH_MONO      : in  std_logic := '0'   -- see T80_S256
 	);
 end T80se_S256;
 
@@ -170,6 +171,7 @@ begin
             GREG       => GREG,
             GA         => GA,
             GA_EN      => GA_EN,
+            ARITH_MONO => ARITH_MONO,
             DIRset     => DIRset,
             DIR        => DIR);
 

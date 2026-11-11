@@ -1,7 +1,7 @@
 {
     "id": "spec256",
     "name": "Spec256",
-    "build": "26111101",
+    "build": "26111102",
     "visible": true,
     "type": "osd",
     "order": 10,

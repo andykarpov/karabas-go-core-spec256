@@ -140,12 +140,37 @@ entity T80_S256 is
 		-- that byte, as the shadow CPUs of ZX-Poly); otherwise the lanes use A
 		GA         : out std_logic_vector(LANES*16-1 downto 0);
 		GA_EN      : out std_logic;
+		-- karabas: after an instruction that puts arithmetic into A (ADD, ADC, SUB, SBC r / n, AND, XOR,
+		-- OR n, INC A, DEC A, DAA, LD A,n, IN A,(n); NEG, LD A,I / R, IN A,(C)) every lane takes the A
+		-- of the main CPU, as Spec256 DOS v1.2 does in its 12 games (the Spec256 core for MiSTer,
+		-- "arithmetic mono"); AND, XOR, OR r keep the colour of the lane
+		ARITH_MONO : in  std_logic := '0';
 		DIRSet     : in  std_logic := '0';
 		DIR        : in  std_logic_vector(211 downto 0) := (others => '0') -- IFF2, IFF1, IM, IY, HL', DE', BC', IX, HL, DE, BC, PC, SP, R, I, F', A', F, A
 	);
 end T80_S256;
 
 architecture rtl of T80_S256 is
+
+	-- karabas: the instructions of ARITH_MONO (IR, ISet of the instruction just done)
+	function arith_mono_op(ir : std_logic_vector(7 downto 0); iset : std_logic_vector(1 downto 0)) return boolean is
+	begin
+		if iset = "00" then
+			case ir is
+				when x"C6" | x"CE" | x"D6" | x"DE" | x"E6" | x"EE" | x"F6" |
+				     x"3C" | x"3D" | x"27" | x"3E" | x"DB" => return true;
+				when others => return ir(7 downto 5) = "100";   -- 80-9F: ADD, ADC, SUB, SBC
+			end case;
+		elsif iset = "10" then
+			case ir is
+				when x"44" | x"4C" | x"54" | x"5C" | x"64" | x"6C" | x"74" | x"7C" |
+				     x"57" | x"5F" | x"78" => return true;
+				when others => return false;
+			end case;
+		end if;
+		return false;
+	end function;
+	signal Acc_Sync             : std_logic := '0';  -- karabas: the lanes take ACC in this M1 (T3)
 
 	-- Registers
 	signal ACC, F               : std_logic_vector(7 downto 0);
@@ -447,6 +472,7 @@ begin
 			PreserveC_r <= '0';
 			XY_Ind <= '0';
 			I_RXDD <= '0';
+			Acc_Sync <= '0';
 
 		elsif rising_edge(CLK_n) then
 
@@ -463,6 +489,7 @@ begin
 				Inst_r <= '1';
 				ARegC_r <= '0';
 				IStatus <= DIR(209 downto 208);
+				Acc_Sync <= '0';
 
 			elsif ClkEn = '1' then
 				ALU_Op_r <= "0000";
@@ -507,6 +534,12 @@ begin
 				-- MCycle = 1 and TState = 1, 2, or 3
 
 					if TState = 2 and Wait_n = '1' then
+						-- karabas: the instruction just done (IR, ISet before they take the new opcode)
+						if ARITH_MONO = '1' and arith_mono_op(IR, ISet) then
+							Acc_Sync <= '1';
+						else
+							Acc_Sync <= '0';
+						end if;
 						if Mode < 2 then
 							A(7 downto 0) <= std_logic_vector(R);
 							A(15 downto 8) <= I;
@@ -1579,6 +1612,11 @@ begin
 						if XYbit_undoc='1' then
 							l_DO <= l_ALU_Q;
 						end if;
+					end if;
+
+					-- ARITH_MONO: the A of the main CPU, the instruction before done
+					if MCycle = "001" and TState = 3 and Acc_Sync = '1' then
+						l_ACC <= ACC;
 					end if;
 				end if;
 			end if;
