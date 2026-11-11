@@ -252,13 +252,15 @@ SD_CLK              <= '1';
 MIDI_TX             <= '1';
 MIDI_CLK            <= '0';
 MIDI_RESET_N        <= '1';
-FDC_DRIVE           <= "11";
-FDC_SIDE_N          <= '1';
-FDC_WDATA           <= '1';
-FDC_MOTOR           <= '1';
-FDC_WGATE           <= '1';
-FDC_STEP            <= '1';
-FDC_DIR             <= '1';
+-- no floppy: the FDC outputs pass inverters on the Go (high at the pin = active), so all 0 (no drive,
+-- no motor, no write gate; '1' kept the drive LED on)
+FDC_DRIVE           <= "00";
+FDC_SIDE_N          <= '0';
+FDC_WDATA           <= '0';
+FDC_MOTOR           <= '0';
+FDC_WGATE           <= '0';
+FDC_STEP            <= '0';
+FDC_DIR             <= '0';
 
 u_sdr_clk: ODDR2 -- SDR_CLK = clk_sdr (clk_bus at 180 degrees): rises in the middle of a clk_bus period
 generic map(DDR_ALIGNMENT => "NONE", INIT => '0', SRTYPE => "SYNC")

@@ -2,14 +2,21 @@
 // its own address only in a page of lane_pages (the tables of reversed bytes), the same 256-byte page, when the word at the address of the main CPU is not
 // coloured (a table) and the 8 lane addresses are not all the same; otherwise it gets the plane of that
 // word. The words are {bank, a[13:0], 3 bits} (pager.vhd): the same address in two banks gives the
-// word of the bank, also to the lanes.
+// word of the bank, also to the lanes. The read windows (win_*): a data read in a window page with the
+// opcode filter passing gives the lanes their own addresses in any page (the bank of their 16K window,
+// top_bank at C000) and XORs the planes; not in an M1 read, not past win_cnt, the first window wins.
 //   cd src/sim && sed 's/\bdo\b/dout/g; s/ = 9.b111111111,/,/' ../rtl/memory/sram.v > work/sram_t.v &&
 //   iverilog -g2005 -o work/tb_sram work/sram_t.v tb_sram.v && vvp work/tb_sram
 // (iverilog takes neither the default value of wr_mask nor, in SystemVerilog mode, the port "do")
 // Prints "tb_sram: <n> errors".
 `timescale 1ns / 1ps
 module tb_sram;
-reg clk = 0, reset = 1, rd = 0, lane_en = 0;
+reg clk = 0, reset = 1, rd = 0, lane_en = 0, m1 = 0;
+reg [2:0] top_bank = 3'd0;
+reg win_we = 0;
+reg [2:0] win_wa = 0;
+reg [40:0] win_wd = 0;
+reg [3:0] win_cnt = 0;
 reg [15:0] a = 0;
 reg [3:0] bank = 4'd2, pb = 4'd2;   // the bank read, the bank of put
 reg [127:0] lane_a = 0;
@@ -26,7 +33,8 @@ always #5 clk = ~clk;
 assign sram_d = (sram_rd_n == 2'b00) ? mem[sram_a] : 16'bz;
 
 sram dut(.clk(clk), .reset(reset), .a(a), .bank(bank), .di(72'd0), .dout(dout), .wr(1'b0), .wr_mask(9'h1FF),
-	.rd(rd), .lane_a(lane_a), .lane_en(lane_en), .lane_pages(lane_pages), .cpu_ena(cpu_ena), .sram_a(sram_a), .sram_d(sram_d),
+	.rd(rd), .lane_a(lane_a), .lane_en(lane_en), .lane_pages(lane_pages),
+	.m1(m1), .top_bank(top_bank), .win_we(win_we), .win_wa(win_wa), .win_wd(win_wd), .win_cnt(win_cnt), .cpu_ena(cpu_ena), .sram_a(sram_a), .sram_d(sram_d),
 	.sram_wr_n(sram_wr_n), .sram_rd_n(sram_rd_n), .busy(busy), .do_rdy(do_rdy));
 
 // the word of an address in the bank pb: main byte m, plane p = pl[p]
@@ -47,6 +55,22 @@ task read(input [15:0] addr);
 		while (busy) @(negedge clk);
 		rd = 0;
 		@(negedge clk);
+	end
+endtask
+
+// window n: pages first..last, opcode filter value / mask (negate), xor
+task window(input [2:0] n, input [7:0] first, input [7:0] last, input [7:0] val, input [7:0] mask,
+	input neg, input [7:0] x);
+	begin
+		@(negedge clk) win_wa = n; win_wd = {x, neg, mask, val, last, first}; win_we = 1;
+		@(negedge clk) win_we = 0;
+	end
+endtask
+
+// an opcode fetch (M1) at addr: the opcode of the window filters
+task fetch(input [15:0] addr);
+	begin
+		m1 = 1; lane_en = 0; bank = 4'd5; read(addr); m1 = 0; lane_en = 1; bank = 4'd2;
 	end
 endtask
 
@@ -71,6 +95,19 @@ initial begin
 	pb = 4'd3;
 	put(16'h8040, 8'h34, {8{8'h34}});
 	for (p = 1; p < 8; p = p + 1) put(16'h8010 + p, 8'h55, {8{8'hB0 + p[7:0]}});
+	// a coloured word at A040 (bank 2) and the entries of the lanes in other 16K windows: lane p at
+	// 50(10+p) (bank 5) for p odd, at C0(10+p) for p even (bank 7, a decoy in bank 0)
+	pb = 4'd2;
+	put(16'hA040, 8'h12, 64'h12_12_12_12_77_12_12_12);
+	pb = 4'd5;
+	for (p = 1; p < 8; p = p + 2) put(16'h5010 + p, 8'h55, {8{8'hC0 + p[7:0]}});
+	put(16'h6000, 8'h0A, {8{8'h0A}});   // opcodes
+	put(16'h6001, 8'h7E, {8{8'h7E}});
+	put(16'h6002, 8'h1A, {8{8'h1A}});
+	pb = 4'd7;
+	for (p = 2; p < 8; p = p + 2) put(16'hC010 + p, 8'h55, {8{8'hD0 + p[7:0]}});
+	pb = 4'd0;
+	for (p = 2; p < 8; p = p + 2) put(16'hC010 + p, 8'h55, {8{8'hEE}});
 	pb = 4'd2;
 	#20 reset = 0;
 	#40;   // prev_rd of sram.v is not reset: a clock with rd = 0 first
@@ -122,6 +159,65 @@ initial begin
 	read(16'h8040);
 	expect({8{8'h34}}, "bank 3, lane_en off");
 	bank = 4'd2;
+
+	// the windows: A040 with lane 0 at a, lanes p at their addresses in banks 5 and 7
+	lane_en = 1;
+	top_bank = 3'd7;
+	lane_a[15:0] = 16'hA040;
+	for (p = 1; p < 8; p = p + 1) lane_a[16*p +: 16] = (p % 2) ? 16'h5010 + p : 16'hC010 + p;
+	read(16'hA040);
+	expect(64'h12_12_12_12_77_12_12_12, "no window");
+	window(0, 8'hA0, 8'hA0, 8'h00, 8'h00, 1'b0, 8'h00);   // A0, any opcode
+	read(16'hA040);
+	expect(64'h12_12_12_12_77_12_12_12, "win_cnt 0");
+	win_cnt = 1;
+	read(16'hA040);
+	expect({8'hC7, 8'hD6, 8'hC5, 8'hD4, 8'hC3, 8'hD2, 8'hC1, 8'h12}, "window");
+	// a window that does not cover A0 first, then A0 with xor FF
+	window(0, 8'h90, 8'h9F, 8'h00, 8'h00, 1'b0, 8'h00);
+	window(1, 8'h40, 8'hFF, 8'h00, 8'h00, 1'b0, 8'hFF);
+	window(2, 8'hA0, 8'hA0, 8'h00, 8'h00, 1'b0, 8'h00);   // never reached: window 1 wins
+	win_cnt = 3;
+	read(16'hA040);
+	expect(~{8'hC7, 8'hD6, 8'hC5, 8'hD4, 8'hC3, 8'hD2, 8'hC1, 8'h12}, "first window, xor");
+	// the 8 lane addresses the same: the planes of a, XORed
+	for (p = 0; p < 8; p = p + 1) lane_a[16*p +: 16] = 16'h5011;
+	read(16'hA040);
+	expect(~64'h12_12_12_12_77_12_12_12, "uniform, xor");
+	// lane_en off: the planes of a, XORed
+	lane_en = 0;
+	read(16'hA040);
+	lane_en = 1;
+	expect(~64'h12_12_12_12_77_12_12_12, "lane_en off, xor");
+	// an opcode fetch in a window page: no xor (the main byte is the opcode)
+	m1 = 1; lane_en = 0; read(16'hA040); m1 = 0; lane_en = 1;
+	expect(64'h12_12_12_12_77_12_12_12, "M1");
+	lane_a[15:0] = 16'hA040;
+	for (p = 1; p < 8; p = p + 1) lane_a[16*p +: 16] = (p % 2) ? 16'h5010 + p : 16'hC010 + p;
+	// the opcode filter: op & EF = 0A (LD A,(BC) / LD A,(DE))
+	window(0, 8'hA0, 8'hA0, 8'h0A, 8'hEF, 1'b0, 8'h00);
+	win_cnt = 1;
+	fetch(16'h6000);
+	read(16'hA040);
+	expect({8'hC7, 8'hD6, 8'hC5, 8'hD4, 8'hC3, 8'hD2, 8'hC1, 8'h12}, "op 0A");
+	fetch(16'h6002);
+	read(16'hA040);
+	expect({8'hC7, 8'hD6, 8'hC5, 8'hD4, 8'hC3, 8'hD2, 8'hC1, 8'h12}, "op 1A");
+	fetch(16'h6001);
+	read(16'hA040);
+	expect(64'h12_12_12_12_77_12_12_12, "op 7E");
+	// negated: every opcode but 7E
+	window(0, 8'hA0, 8'hA0, 8'h7E, 8'hFF, 1'b1, 8'h00);
+	read(16'hA040);
+	expect(64'h12_12_12_12_77_12_12_12, "op != 7E, 7E");
+	fetch(16'h6000);
+	read(16'hA040);
+	expect({8'hC7, 8'hD6, 8'hC5, 8'hD4, 8'hC3, 8'hD2, 8'hC1, 8'h12}, "op != 7E, 0A");
+	// top_bank 0: the lanes at C0xx read bank 0
+	top_bank = 3'd0;
+	read(16'hA040);
+	expect({8'hC7, 8'hEE, 8'hC5, 8'hEE, 8'hC3, 8'hEE, 8'hC1, 8'h12}, "top_bank 0");
+	win_cnt = 0;
 
 	$display("tb_sram: %0d errors", errors);
 	$finish;

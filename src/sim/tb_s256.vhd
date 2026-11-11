@@ -12,6 +12,9 @@
 --   every lane must be the main CPU: GREG of each lane = REG, GDO = DO.
 -- - G_TABLE (gen_table.py): at the end lane p has A = 1 << (7 - p), the entry
 --   of its own byte in a table of reversed bytes (the lane addresses, GA).
+-- - G_MONO (gen_mono.py): ARITH_MONO; at the end the registers of each lane are
+--   those gen_mono.py lists (the A of the main CPU after arithmetic, the
+--   colour after AND A). G_ARITH_MONO = false gives the coloured values.
 -- The lanes read the memory at their own address (GA) when GA_EN is set.
 -- G_TRACE: a line per instruction (the M1 of each opcode byte) with REG
 -- and GREG, for the comparison with the GZX reference (sim/gzx).
@@ -31,6 +34,8 @@ entity tb_s256 is
 		G_IMM_MASTER : boolean := true;   -- operands of the instruction stream from the main memory
 		G_CYCLES     : integer := 1000000;
 		G_TABLE      : boolean := false;  -- the lane address test of gen_table.py
+		G_MONO       : boolean := false;  -- the ARITH_MONO test of gen_mono.py
+		G_ARITH_MONO : boolean := true;   -- with G_MONO: ARITH_MONO on
 		G_LOG_GA     : boolean := false;
 		G_TABLE_PAGE : integer := 16#80#;  -- the page of the table of reversed bytes (the .256 header)  -- print the reads where a lane has an address of its own
 		G_TRACE      : string  := "";
@@ -40,6 +45,11 @@ end tb_s256;
 
 architecture sim of tb_s256 is
 	constant LANES : integer := 8;
+	function mono_on return std_logic is
+	begin
+		if G_MONO and G_ARITH_MONO then return '1'; end if;
+		return '0';
+	end function;
 	constant FRAME : integer := 69888;
 
 	signal clk     : std_logic := '0';
@@ -68,6 +78,7 @@ architecture sim of tb_s256 is
 	signal d_greg : std_logic_vector(LANES*212-1 downto 0);
 	signal d_ga   : std_logic_vector(LANES*16-1 downto 0);
 	signal d_ga_en : std_logic;
+	signal arith_mono : std_logic;
 
 	function hex(v : std_logic_vector) return string is
 		constant n : integer := (v'length + 3) / 4;
@@ -95,6 +106,8 @@ begin
 			RFSH_n => r_rfsh_n, HALT_n => r_halt_n, BUSAK_n => open, A => r_a, DI => r_di, DO => r_do,
 			DIRset => dirset, DIR => dir, REG => r_reg, MC_O => open, TS_O => open, IR_O => open, PC_O => open);
 
+	arith_mono <= mono_on;
+
 	dut : entity work.T80se_S256
 		generic map (LANES => LANES)
 		port map (
@@ -102,7 +115,8 @@ begin
 			M1_n => d_m1_n, MREQ_n => d_mreq_n, IORQ_n => d_iorq_n, RD_n => d_rd_n, WR_n => d_wr_n,
 			RFSH_n => d_rfsh_n, HALT_n => d_halt_n, BUSAK_n => open, A => d_a, DI => d_di, DO => d_do,
 			DIRset => dirset, DIR => dir, REG => d_reg, MC_O => d_mc, TS_O => d_ts, IR_O => open, PC_O => open,
-			INST => d_inst, GDI => d_gdi, GDO => d_gdo, GREG => d_greg, GA => d_ga, GA_EN => d_ga_en);
+			INST => d_inst, GDI => d_gdi, GDO => d_gdo, GREG => d_greg, GA => d_ga, GA_EN => d_ga_en,
+			ARITH_MONO => arith_mono);
 
 	-- clock and interrupts; the clock stops after G_CYCLES
 	process
@@ -264,6 +278,18 @@ begin
 				writeline(output, ln);
 			end if;
 		end procedure;
+
+		-- register (bits hi..hi-7 of GREG) of lane p: plane when ARITH_MONO is off, mono when on
+		procedure mono_check(p : integer; name : string; hi : integer; plane, mono : integer) is
+			variable v : std_logic_vector(7 downto 0);
+			variable want : integer;
+		begin
+			v := d_greg(p*212+hi downto p*212+hi-7);
+			if G_ARITH_MONO then want := mono; else want := plane; end if;
+			if to_integer(unsigned(v)) /= want then
+				err("mono: lane " & integer'image(p) & " " & name & " " & hex(v) & " /= " & integer'image(want));
+			end if;
+		end procedure;
 	begin
 		if G_TRACE /= "" then
 			file_open(tf, G_TRACE, write_mode);
@@ -315,6 +341,16 @@ begin
 		end loop;
 		if G_TRACE /= "" then
 			file_close(tf);
+		end if;
+		if G_MONO then
+			for p in 0 to LANES-1 loop
+				mono_check(p, "C", 87, 2**p, 1);
+				mono_check(p, "D", 111, 2**p, 1);
+				mono_check(p, "E", 103, 2**p, 2**p);
+				mono_check(p, "H", 127, (256 - 2**p) mod 256, 255);
+				mono_check(p, "L", 119, 2**p + 1, 2);
+				mono_check(p, "A", 7, 2**p + 1, 2);
+			end loop;
 		end if;
 		if G_TABLE then
 			for p in 0 to LANES-1 loop
