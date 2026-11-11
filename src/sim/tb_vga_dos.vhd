@@ -5,12 +5,15 @@
 -- which DOS leaves out) on a screen whose attributes change from cell to cell, colour (x, y) =
 -- (7x + 13y) mod 256, against an instance in Palette mode without mixing, HideSame or BkOverFF
 -- whose colours C0-FF are already 11 ink colour(2:0) of their cell: the same picture, the
--- background at colour 0 in both. The first G_ROWS rows of cells (the whole screen with 24).
+-- background at colour 0 in both. BkOverFF (EmuZWin): an instance in Palette mode with BkOverFF on
+-- colours where every third pixel is 0xFF, against one without BkOverFF whose 0xFF are 0 where the
+-- ink of the cell is not white: the background through 0xFF but not on a white ink. The first G_ROWS
+-- rows of cells (the whole screen with 24; the inks 0-7 are in every row).
 --   cd src/sim && ghdl -a --std=93c -fexplicit --ieee=synopsys --workdir=work ../rtl/video/sync.vhd \
 --     ../rtl/video/vga_spec256.vhd tb_vga_dos.vhd
 --   ghdl -e --std=93c -fexplicit --ieee=synopsys --workdir=work tb_vga_dos
 --   ghdl -r --std=93c -fexplicit --ieee=synopsys --workdir=work tb_vga_dos --ieee-asserts=disable
--- Prints "tb_vga_dos: <n> errors" (about half a minute).
+-- Prints "tb_vga_dos: <n> errors" (about 40 seconds).
 -------------------------------------------------------------------------------
 library ieee;
 use ieee.std_logic_1164.all;
@@ -18,7 +21,7 @@ use ieee.numeric_std.all;
 use std.textio.all;
 
 entity tb_vga_dos is
-	generic (G_ROWS : integer := 8);
+	generic (G_ROWS : integer := 4);
 end tb_vga_dos;
 
 architecture sim of tb_vga_dos is
@@ -58,7 +61,8 @@ architecture sim of tb_vga_dos is
 
 	-- the planes of every screen address: byte p = plane p, bit 7 the left pixel; ref: C0-FF as
 	-- 11 ink colour(2:0) of the cell
-	function table(ref : boolean) return planes_t is
+	-- kind 0: DOS, 1: its reference, 2: BkOverFF, 3: its reference
+	function table(kind : integer) return planes_t is
 		variable t : planes_t;
 		variable a : std_logic_vector(12 downto 0);
 		variable ya, at : std_logic_vector(7 downto 0);
@@ -72,8 +76,14 @@ architecture sim of tb_vga_dos is
 			at := attr(col, y / 8);
 			for j in 0 to 7 loop
 				c := colour(col * 8 + j, y);
-				if ref and c >= 192 then
+				if kind = 1 and c >= 192 then
 					c := 192 + to_integer(unsigned(at(2 downto 0))) * 8 + c mod 8;
+				end if;
+				if kind >= 2 and (col * 8 + j + y) mod 3 = 0 then
+					c := 255;
+				end if;
+				if kind = 3 and c = 255 and at(2 downto 0) /= "111" then
+					c := 0;
 				end if;
 				for p in 0 to 7 loop
 					if (c / 2**p) mod 2 = 1 then t(i)(p*8 + 7 - j) := '1'; else t(i)(p*8 + 7 - j) := '0'; end if;
@@ -85,8 +95,10 @@ architecture sim of tb_vga_dos is
 		end loop;
 		return t;
 	end function;
-	constant DOS_T : planes_t := table(false);
-	constant REF_T : planes_t := table(true);
+	constant DOS_T : planes_t := table(0);
+	constant REF_T : planes_t := table(1);
+	constant BK_T : planes_t := table(2);
+	constant BKREF_T : planes_t := table(3);
 	constant PAL : string := "../rtl/video/sp256_palette.hex";
 
 	signal clk : std_logic := '0';
@@ -96,6 +108,10 @@ architecture sim of tb_vga_dos is
 	signal data0, data1 : std_logic_vector(7 downto 0);
 	signal gdata0, gdata1 : std_logic_vector(63 downto 0);
 	signal r0, g0, b0, r1, g1, b1 : std_logic_vector(7 downto 0);
+	signal addr2, gaddr2, addr3, gaddr3 : std_logic_vector(12 downto 0);
+	signal data2, data3 : std_logic_vector(7 downto 0);
+	signal gdata2, gdata3 : std_logic_vector(63 downto 0);
+	signal r2, g2, b2, r3, g3, b3 : std_logic_vector(7 downto 0);
 	signal bg_req, prev_req : std_logic := '0';
 	signal bg_y : std_logic_vector(7 downto 0);
 	signal lb_we : std_logic := '0';
@@ -127,7 +143,27 @@ begin
 			O_BG_REQ => open, O_BG_Y => open,
 			O_ADDR => addr1, O_GFX_ADDR => gaddr1, O_R => r1, O_G => g1, O_B => b1);
 
-	-- the line buffer of both: colour (x + 3y) mod 254 + 1 on the asked line, 128 words over 128 clocks
+	bk_i : entity work.vga_spec256
+		generic map (PAL_FILE => PAL)
+		port map (I_CLK => clk, I_MODE => '1', I_DATA => data2, I_GFX_DATA => gdata2, I_BORDER => "010",
+			I_HCNT => hcnt, I_VCNT => vcnt, I_BLANK => blank,
+			I_PAL_CLK => clk, I_PAL_WR => '0', I_PAL_A => x"00", I_PAL_D => x"000000",
+			I_COLOUR_MODE => "10", I_PAPER00INKFF => '1', I_HIDE_SAME => '0', I_UP_MIXED => x"00", I_DOWN_MIXED => x"00",
+			I_BG_ON => '1', I_BK_OVER_FF => '1', I_LB_CLK => clk, I_LB_WE => lb_we, I_LB_A => lb_a, I_LB_D => lb_d,
+			O_BG_REQ => open, O_BG_Y => open,
+			O_ADDR => addr2, O_GFX_ADDR => gaddr2, O_R => r2, O_G => g2, O_B => b2);
+
+	bkref_i : entity work.vga_spec256
+		generic map (PAL_FILE => PAL)
+		port map (I_CLK => clk, I_MODE => '1', I_DATA => data3, I_GFX_DATA => gdata3, I_BORDER => "010",
+			I_HCNT => hcnt, I_VCNT => vcnt, I_BLANK => blank,
+			I_PAL_CLK => clk, I_PAL_WR => '0', I_PAL_A => x"00", I_PAL_D => x"000000",
+			I_COLOUR_MODE => "10", I_PAPER00INKFF => '1', I_HIDE_SAME => '0', I_UP_MIXED => x"00", I_DOWN_MIXED => x"00",
+			I_BG_ON => '1', I_BK_OVER_FF => '0', I_LB_CLK => clk, I_LB_WE => lb_we, I_LB_A => lb_a, I_LB_D => lb_d,
+			O_BG_REQ => open, O_BG_Y => open,
+			O_ADDR => addr3, O_GFX_ADDR => gaddr3, O_R => r3, O_G => g3, O_B => b3);
+
+	-- the line buffer of all: colour (x + 3y) mod 254 + 1 on the asked line, 128 words over 128 clocks
 	process
 		variable y : integer;
 	begin
@@ -154,6 +190,10 @@ begin
 			data1 <= SCREEN(to_integer(unsigned(addr1)));
 			gdata0 <= DOS_T(to_integer(unsigned(gaddr0)));
 			gdata1 <= REF_T(to_integer(unsigned(gaddr1)));
+			data2 <= SCREEN(to_integer(unsigned(addr2)));
+			data3 <= SCREEN(to_integer(unsigned(addr3)));
+			gdata2 <= BK_T(to_integer(unsigned(gaddr2)));
+			gdata3 <= BKREF_T(to_integer(unsigned(gaddr3)));
 		end if;
 	end process;
 
@@ -170,7 +210,7 @@ begin
 
 	process
 		variable errors, last_errors, n : integer := 0;
-		variable c0, c1 : std_logic_vector(23 downto 0);
+		variable c0, c1, c2, c3 : std_logic_vector(23 downto 0);
 		variable l : line;
 		function hex24(v : std_logic_vector(23 downto 0)) return string is
 			constant d : string(1 to 16) := "0123456789ABCDEF";
@@ -192,10 +232,13 @@ begin
 			c0 := r0 & g0 & b0;
 			c1 := r1 & g1 & b1;
 			if c0 /= x"000000" and c0 /= x"FF0000" then n := n + 1; end if;  -- not blank, not the border
-			if c0 /= c1 then errors := errors + 1; end if;
+			c2 := r2 & g2 & b2;
+			c3 := r3 & g3 & b3;
+			if c0 /= c1 or c2 /= c3 then errors := errors + 1; end if;
 			if errors /= last_errors and errors <= 20 then
 				write(l, string'("error: h ") & integer'image(to_integer(unsigned(hcnt))) & " v " &
-					integer'image(to_integer(unsigned(vcnt))) & " dos " & hex24(c0) & " ref " & hex24(c1));
+					integer'image(to_integer(unsigned(vcnt))) & " dos " & hex24(c0) & " ref " & hex24(c1) &
+					" bkoverff " & hex24(c2) & " ref " & hex24(c3));
 				writeline(output, l);
 			end if;
 			last_errors := errors;

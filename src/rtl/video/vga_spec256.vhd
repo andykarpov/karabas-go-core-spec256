@@ -338,7 +338,8 @@ p00 <= I_PAPER00INKFF when I_COLOUR_MODE = "00" else not I_COLOUR_MODE(1);
 
 -- with a background (ZX-Poly): colour 0 / 0xFF as paper / ink with Paper00InkFF; the background where
 -- the attribute flashes or hides (ink = paper) and, without Paper00InkFF, where the colour is 0 (and
--- 0xFF with BkOverFF); in Pixel mode where the colour is 0
+-- 0xFF with BkOverFF, but not where the ink of the attribute is white: EmuZWin); in Pixel mode where
+-- the colour is 0
 show_bg <= '0' when I_BG_ON = '0' else
 	'1' when dos = '1' and gfx_px = x"00" else
 	'0' when dos = '1' else
@@ -347,7 +348,7 @@ show_bg <= '0' when I_BG_ON = '0' else
 	'0' when p00 = '1' and (gfx_px = x"00" or gfx_px = x"FF") else
 	'1' when flashing = '1' or (I_HIDE_SAME = '1' and same = '1') else
 	'0' when p00 = '1' else
-	'1' when gfx_px = x"00" or (I_BK_OVER_FF = '1' and gfx_px = x"FF") else
+	'1' when gfx_px = x"00" or (I_BK_OVER_FF = '1' and gfx_px = x"FF" and attr_reg(2 downto 0) /= "111") else
 	'0';
 
 process (I_COLOUR_MODE, gfx_px, gfx_rgb, std_rgb, ink6, paper6, same, p00, I_HIDE_SAME, I_BG_ON, dos)

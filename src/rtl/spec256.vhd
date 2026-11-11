@@ -1208,13 +1208,13 @@ end process;
 -- поток команд (cpu_inst) - байт основной памяти при GFX_INST_FROM_MAIN, из порта - то же, что CPU.
 rom_gfx_cur <= rom_gfx when p7ffd(4) = '1' else rom_gfx0;
 
-process (selector, sdram_do, kb_do, joy_do, ay_do, cpu_inst, rom_gfx_cur)
+process (selector, sdram_do, kb_do, joy_do, ay_do, cpu_inst, rom_gfx_cur, port_xxfe_reg)
     variable d : std_logic_vector(7 downto 0);
 begin
     case selector is
         when "000" => d := sdram_do(7 downto 0);
         when "001" => d := sdram_do(7 downto 0);
-        when "010" => d := "111" & kb_do;
+        when "010" => d := '1' & port_xxfe_reg(4) & '1' & kb_do;   -- bit 6 as an Issue 3 without a tape: EAR (bit 4 of the last OUT)
         when "011" => d := joy_do;
         when "100" => d := ay_do;
         when "101" => d := x"00";
