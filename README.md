@@ -31,6 +31,10 @@ are built the same way but not tested on their boards yet.
   change that.
 - **Background pictures** (`.B00`...): colour 0 shows the picture, chosen by the rules of the
   `.CFG` as the game runs; they are kept in the SDRAM of the board.
+- **The 12 games of Spec256 DOS** (Knight Lore, Underwurlde, Army Moves...): their backgrounds
+  change as in the original program (its background routines) and they are drawn its way (colours
+  C0-FF take the INK of the attribute). Some games get small fixes in the converter (Cybernoid II,
+  Jetpac, Mad Mix 2, Bruce Lee).
 - **GFX 256** in the OSD switches between the 256-colour picture and the ordinary Spectrum picture
   at any time.
 - **Computer:** a Spectrum 48K, Z80 at 3.5 MHz, the 48K ROM. The frame interrupt comes from the
@@ -43,7 +47,7 @@ are built the same way but not tested on their boards yet.
 
 Not there yet:
 
-- The 128K Spec256 extensions (`.GF0`...`.GF7`, `.GFA`), tape, saving the game.
+- Tape, saving the game.
 
 ## Getting started
 
@@ -118,6 +122,8 @@ modules are the submodule `modules/`
 - The GZX emulator and NextTang: the reference for how Spec256 executes the
   games and for the palette (no code taken).
 - The Spec256 core of the Reverse-U16 board: MVV; this core started as its port.
+- The Spec256 core for MiSTer (albconde): the background routines and the rendering of Spec256 DOS
+  read from its program, the fixes of games (behaviour only, no code taken).
 - T80: Daniel Wallner and others; YM2149 / AY: MikeJ, Sorgelig.
 - Karabas Go boards and the core: Andy Karpov.
 

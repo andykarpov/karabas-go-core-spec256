@@ -38,6 +38,9 @@ port (
 	-- the paper the next one, O_BG_Y, is asked for by a toggle of O_BG_REQ
 	I_BG_ON		: in std_logic := '0';
 	I_BK_OVER_FF	: in std_logic := '0';	-- BkOverFF
+	-- the rendering of Spec256 DOS v1.2 (its 12 games): the background only at colour 0, colours C0-FF
+	-- take the ink of the attribute (11 ink colour(2:0)), 0xFF is a colour, no mixing; not in Pixel mode
+	I_DOS		: in std_logic := '0';
 	I_LB_CLK	: in std_logic := '0';
 	I_LB_WE		: in std_logic := '0';
 	I_LB_A		: in std_logic_vector(7 downto 0) := (others => '0');
@@ -94,6 +97,10 @@ architecture rtl of vga_spec256 is
 	signal cur_y0		: std_logic := '0';	-- bit 0 of the line of the paper being shown
 	signal gfx_x		: std_logic_vector(8 downto 0);	-- y bit 0, x
 	signal show_bg		: std_logic;
+	signal dos		: std_logic;
+	signal ink_next		: std_logic_vector(2 downto 0);	-- the ink of the pixel read from the palette
+	signal pal_px		: std_logic_vector(7 downto 0);
+	signal pal_idx		: std_logic_vector(7 downto 0);
 
 -- ZX-Spectum screen
 	-- the screen twice as large in the middle of 720x576 (sync.vhd): 104 pixels on each side, the
@@ -235,9 +242,16 @@ end process;
 process (I_CLK)
 begin
 	if rising_edge(I_CLK) then
-		gfx_rgb <= pal(to_integer(unsigned(gfx_dl(GFX_DELAY-1)(7 downto 0))));
+		gfx_rgb <= pal(to_integer(unsigned(pal_idx)));
 	end if;
 end process;
+
+-- DOS: C0-FF take the ink. The palette is read a clock before the pixel leaves, when attr_reg can
+-- still be the attribute of the cell before: at the last clock of a cell the next one is I_DATA.
+dos <= I_DOS when I_COLOUR_MODE /= "11" else '0';
+pal_px <= gfx_dl(GFX_DELAY-1)(7 downto 0);
+ink_next <= I_DATA(2 downto 0) when spec_h_count_reg(3 downto 0) = "1110" else attr_reg(2 downto 0);
+pal_idx <= "11" & ink_next & pal_px(2 downto 0) when dos = '1' and pal_px(7 downto 6) = "11" else pal_px;
 
 -- the background: the line buffer read two clocks before the pixel leaves the delay line, the byte of
 -- the pixel one clock before, its colour from the copy of the palette with the pixel
@@ -324,19 +338,24 @@ p00 <= I_PAPER00INKFF when I_COLOUR_MODE = "00" else not I_COLOUR_MODE(1);
 
 -- with a background (ZX-Poly): colour 0 / 0xFF as paper / ink with Paper00InkFF; the background where
 -- the attribute flashes or hides (ink = paper) and, without Paper00InkFF, where the colour is 0 (and
--- 0xFF with BkOverFF); in Pixel mode where the colour is 0
+-- 0xFF with BkOverFF, but not where the ink of the attribute is white: EmuZWin); in Pixel mode where
+-- the colour is 0
 show_bg <= '0' when I_BG_ON = '0' else
+	'1' when dos = '1' and gfx_px = x"00" else
+	'0' when dos = '1' else
 	'1' when I_COLOUR_MODE = "11" and gfx_px = x"00" else
 	'0' when I_COLOUR_MODE = "11" else
 	'0' when p00 = '1' and (gfx_px = x"00" or gfx_px = x"FF") else
 	'1' when flashing = '1' or (I_HIDE_SAME = '1' and same = '1') else
 	'0' when p00 = '1' else
-	'1' when gfx_px = x"00" or (I_BK_OVER_FF = '1' and gfx_px = x"FF") else
+	'1' when gfx_px = x"00" or (I_BK_OVER_FF = '1' and gfx_px = x"FF" and attr_reg(2 downto 0) /= "111") else
 	'0';
 
-process (I_COLOUR_MODE, gfx_px, gfx_rgb, std_rgb, ink6, paper6, same, p00, I_HIDE_SAME, I_BG_ON)
+process (I_COLOUR_MODE, gfx_px, gfx_rgb, std_rgb, ink6, paper6, same, p00, I_HIDE_SAME, I_BG_ON, dos)
 begin
-	if I_COLOUR_MODE = "11" then
+	if dos = '1' then
+		sel_rgb <= gfx_rgb;
+	elsif I_COLOUR_MODE = "11" then
 		if gfx_px = x"FF" then sel_rgb <= std_rgb; else sel_rgb <= gfx_rgb; end if;
 	elsif I_HIDE_SAME = '1' and same = '1' and I_BG_ON = '0' then
 		sel_rgb <= ink6(5 downto 4) & ink6(5 downto 4) & ink6(5 downto 4) & ink6(5 downto 4) &
@@ -355,7 +374,7 @@ begin
 	end if;
 end process;
 
-mixed <= '1' when I_COLOUR_MODE /= "11" and (unsigned(gfx_px) < unsigned(I_DOWN_MIXED) or
+mixed <= '1' when I_COLOUR_MODE /= "11" and dos = '0' and (unsigned(gfx_px) < unsigned(I_DOWN_MIXED) or
 	unsigned(gfx_px) > 255 - unsigned(I_UP_MIXED)) else '0';
 
 process (mixed, sel_rgb, std_rgb)
