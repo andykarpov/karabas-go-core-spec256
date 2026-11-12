@@ -151,7 +151,8 @@ MCU_IO(5 downto 2) <= "ZZZZ";
 
 U1: entity work.spec256
 generic map(
-    BURST_MAX_MHZ     => 32        -- bursts of the .256 at 32 MHz (MCU_SCK on a global clock pin)
+    BURST_MAX_MHZ     => 32,       -- (link v1) bursts of the .256 at 32 MHz (MCU_SCK on a global clock pin)
+    LINK              => 2         -- MCU link v2: MCU_BURST_READY (MCU_IO(1)) is the interrupt to the mcu
 )
 port map(
     -- clock
