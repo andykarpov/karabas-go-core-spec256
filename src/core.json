@@ -13,7 +13,7 @@
     "boards": {
         "go": {"bitstream": "karabas_go.bin"},
         "mini": {"bitstream": "karabas_mini.bin"},
-        "minig": {"bitstream": "karabas_minig.bin"}
+        "minig": {"link": 2, "build": "26111202", "bitstream": "karabas_minig.bin"}
     },
     "osd": [
     {"type": "P", "name": "Please choose a snapshot to"},
