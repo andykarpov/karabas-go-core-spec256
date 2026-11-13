@@ -11,9 +11,9 @@
     {"filename": "roms/82.rom", "address": 16384}
     ],
     "boards": {
-        "go": {"bitstream": "karabas_go.bin"},
-        "mini": {"bitstream": "karabas_mini.bin"},
-        "minig": {"bitstream": "karabas_minig.bin"}
+        "go": {"link": 2, "build": "26111346", "bitstream": "karabas_go.bin"},
+        "mini": {"link": 2, "build": "26111346", "bitstream": "karabas_mini.bin"},
+        "minig": {"link": 2, "build": "26111202", "bitstream": "karabas_minig.bin"}
     },
     "osd": [
     {"type": "P", "name": "Please choose a snapshot to"},

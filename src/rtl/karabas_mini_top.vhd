@@ -145,7 +145,8 @@ MCU_IO(3 downto 2) <= "ZZ";
 
 U1: entity work.spec256
 generic map(
-    BURST_MAX_MHZ     => 0         -- bursts at the clock of the link: MCU_SCK is not on a global clock pin (as tsconf)
+    BURST_MAX_MHZ     => 0,        -- (link v1) bursts at the clock of the link: MCU_SCK is not on a global clock pin
+    LINK              => 2         -- MCU link v2: MCU_BURST_READY is the interrupt to the mcu
 )
 port map(
     -- clock

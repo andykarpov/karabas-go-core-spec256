@@ -54,7 +54,10 @@ generic (
     -- or from the lane planes (GZX), see docs/SIMD.md 1.2
     GFX_INST_FROM_MAIN : boolean := true;
     -- the highest burst sck of the mcu link in the CAPS answer, MHz (0: the normal link clock), see kg_mcu
-    BURST_MAX_MHZ      : integer := 0
+    BURST_MAX_MHZ      : integer := 0;
+    -- the MCU link: 1 = v1 (kg_mcu, kg_osd_overlay), 2 = v2 (kg_mcu2, kg_l2_osd_overlay; MCU_BURST_READY is
+    -- then the interrupt to the mcu, on the same IO1 line)
+    LINK               : integer := 1
 );
 port (
     -- Clock
@@ -73,7 +76,7 @@ port (
     MCU_MOSI    : in  std_logic;
     MCU_MISO    : out std_logic;
     MCU_IO      : in  std_logic_vector(3 downto 0);  -- [0] burst cs_n, [2] sd2 cs_n, [3] ft cs_n
-    MCU_BURST_READY : out std_logic;
+    MCU_BURST_READY : out std_logic;    -- LINK 2: MCU_INT
 
     -- VGA
     VGA_RGB     : out std_logic_vector(23 downto 0);
@@ -277,6 +280,15 @@ signal softsw_command: std_logic_vector(15 downto 0);
 signal osd_command   : std_logic_vector(15 downto 0);
 signal osd_command_s1, osd_command_s2, osd_command_vga : std_logic_vector(15 downto 0) := (others => '0');
 signal softsw_regs   : std_logic_vector(12*8-1 downto 0);
+-- link v2: the OSD of kg_mcu2 to kg_l2_osd_overlay
+signal osd2_wr, osd2_en, osd2_zoom : std_logic;
+signal osd2_waddr    : std_logic_vector(11 downto 0);
+signal osd2_wdata    : std_logic_vector(7 downto 0);
+signal osd2_fg, osd2_bg : std_logic_vector(23 downto 0);
+signal osd2_alpha, osd2_place : std_logic_vector(1 downto 0);
+signal osd2_px, osd2_ph : std_logic_vector(4 downto 0);
+signal osd2_py       : std_logic_vector(3 downto 0);
+signal osd2_pw       : std_logic_vector(5 downto 0);
 signal vga_rgb_core  : std_logic_vector(23 downto 0);
 signal kb_nmi        : std_logic := '0';
 signal kb_reset      : std_logic := '0';
@@ -323,6 +335,23 @@ signal sdram_wr      : std_logic;
 signal sdram_wr_mask : std_logic_vector(8 downto 0) := "000000000";
 signal sdram_rdy     : std_logic := '0';
 
+
+-- the OSD of link v1 as a component: its ports v_offset / h_offset (V_OFFSET_IN / H_OFFSET_IN only) have the
+-- names of its generics in VHDL, which knows no case; this core leaves them out
+component kg_osd_overlay
+generic (
+    H_OFFSET : integer := 120;
+    V_OFFSET : integer := 72
+);
+port (
+    clk         : in  std_logic;
+    rgb_i       : in  std_logic_vector(23 downto 0);
+    rgb_o       : out std_logic_vector(23 downto 0);
+    hsync_i     : in  std_logic;
+    vsync_i     : in  std_logic;
+    osd_command : in  std_logic_vector(15 downto 0)
+);
+end component;
 begin
 
 -- PLL: 50 MHz -> 56.25 MHz (the CPU, SRAM, MCU link), the same at 180 degrees, 27 MHz (video, 576p50);
@@ -589,6 +618,7 @@ port map (
     doutb               => vga_gfx_data
 );
 
+G_MCU1: if LINK = 1 generate
 -- MCU link (karabas-go-modules kg_mcu): keyboard, joysticks, OSD, soft switches, the rom loader and the
 -- file loader of the FL item (.256, the ioctl commands, a write for each byte, bursts)
 U9: entity work.kg_mcu
@@ -668,11 +698,127 @@ port map (
     IMG_Q_DI            => x"000000",
     ESP_UART_RX_DATA    => x"00",
     ESP_UART_RX_WR      => '0',
+    PS2_COMMAND         => x"0000",
+    PS2_COMMAND_WR      => '0',
+    FDD_CHNG_REQ        => '0',
+    FDD_CHNG_DS         => "00",
+    PRN_DATA            => x"00",
+    PRN_WR              => '0',
+    FLASHBOOT_START     => '0',
+    FLASHBOOT_COREID    => "00000",
 
     DVI_ONLY            => DVI_ONLY,
     BUSY                => mcu_busy
 );
+end generate G_MCU1;
 mcu_n_reset <= not areset;
+
+-- MCU link v2 (karabas-go-modules kg_mcu2): keyboard, joysticks, the OSD, the switches, the roms of the core
+-- file (LD kind 0) and the .256 of the FL item (LD kind 2, a write for each byte); the interrupt to the mcu on
+-- the IO1 line of v1's burst ready
+G_MCU2: if LINK = 2 generate
+    signal kbd : std_logic_vector(55 downto 0);
+    signal joy_l16, joy_r16 : std_logic_vector(15 downto 0);
+    signal ld_kind : std_logic_vector(1 downto 0);
+    signal ld_active, ld_wr : std_logic;
+    signal ld_addr : std_logic_vector(31 downto 0);
+    signal ld_data : std_logic_vector(7 downto 0);
+    signal port_cfg : std_logic_vector(127 downto 0) := (others => '0');
+begin
+    U9: entity work.kg_mcu2
+    generic map (
+        CAPS            => x"0000",
+        SW_N            => 12,
+        CS_FILTER       => 3,
+        ENABLE_OSD      => 1,
+        ENABLE_IMG      => 0,
+        ENABLE_PORTS    => "0000",
+        ENABLE_RTC      => 0,
+        ENABLE_AUX      => 1,
+        ENABLE_FT       => 0,
+        ENABLE_SD2      => 0
+    )
+    port map (
+        CLK => clk_sdram,
+        N_RESET => mcu_n_reset,
+        MCU_SCK => MCU_SCK,
+        MCU_MOSI => MCU_MOSI,
+        MCU_MISO => MCU_MISO,
+        MCU_SS => MCU_CS_N,
+        MCU_INT => MCU_BURST_READY,
+        MCU_SPI_FT_SS => '1',
+        MCU_SPI_SD2_SS => '1',
+
+        SW => softsw_regs,
+        SW_WR => open, SW_INDEX => open, SW_VALUE => open,
+        HW_ID => open,
+        DVI_ONLY => DVI_ONLY,
+        CORE_BUILD => open, FW_BUILD => open,
+        BUSY => mcu_busy,
+        BTNS => open,
+        RELOAD_REQ => '0',
+        RELOAD_CORE => x"00",
+
+        KBD => kbd, KBD_WR => open,
+        PS2_CODE => open, PS2_KIND => open, PS2_WR => open,
+        MS_X => open, MS_Y => open, MS_Z => open, MS_B => open, MS_WR => open,
+        JOY_L => joy_l16, JOY_R => joy_r16, JOY_WR => open,
+        PS2_CMD => x"0000", PS2_CMD_WR => '0',
+
+        LD_KIND => ld_kind, LD_SLOT => open, LD_SIZE => open, LD_START => open,
+        LD_ACTIVE => ld_active, LD_END => open, LD_ADDR => ld_addr, LD_DATA => ld_data,
+        LD_WR => ld_wr, LD_READY => '1',
+
+        OSD_WR => osd2_wr, OSD_WADDR => osd2_waddr, OSD_WDATA => osd2_wdata, OSD_EN => osd2_en,
+        OSD_FG => osd2_fg, OSD_BG => osd2_bg, OSD_ALPHA => osd2_alpha, OSD_PX => osd2_px,
+        OSD_PY => osd2_py, OSD_PW => osd2_pw, OSD_PH => osd2_ph, OSD_PLACE => osd2_place,
+        OSD_ZOOM => osd2_zoom,
+
+        SDC_IMG_MOUNTED => open, SDC_IMG_SIZE => open,
+        SDC_RD => x"00", SDC_WR => x"00", SDC_SECTOR => x"00000000",
+        SDC_BUSY => open, SDC_DONE => open, SDC_ERROR => open, SDC_SLOT => open,
+        SDC_BYTE_IN_STROBE => open, SDC_BYTE_ADDR => open,
+        SDC_BYTE_IN_DATA => open, SDC_BYTE_OUT_DATA => x"00",
+        IMG_WP => open, IMG_PHYS_WR => open, IMG_PHYS => open, IMG_FLUSH => open,
+        FDD_CHNG_WR => open, FDD_CHNG => open, FDD_CHNG_REQ => '0', FDD_CHNG_DS => "00",
+        IMG_ACTIVE => open,
+
+        PORT_OUT_DATA => open, PORT_OUT_WR => open, PORT_OUT_READY => "1111",
+        PORT_IN_DATA => x"00000000", PORT_IN_WR => "0000",
+        PORT_IN_FULL => open, PORT_CFG => port_cfg, PORT_STAT => open, PORT_STAT_WR => open,
+
+        RTC_A => x"00", RTC_DI => x"00", RTC_CS => '0', RTC_WR_N => '1',
+        MATRIX_CMD => matrix_cmd,
+        MATRIX_CMD_WR => matrix_cmd_wr,
+        DEBUG_ADDR => x"0000",
+        DEBUG_DATA => x"0000",
+        RTC_DO => open,
+
+        FT_SPI_ON => open, FT_VGA_ON => open, FT_RESET => open, FT_SCK => open, FT_MOSI => open,
+        FT_MISO => '1', FT_CS_N => open,
+        SD2_SCK => open, SD2_MOSI => open, SD2_MISO => '1', SD2_CS_N => open
+    );
+
+    hid_kb_status <= kbd(7 downto 0);
+    hid_kb_dat0 <= kbd(15 downto 8);
+    hid_kb_dat1 <= kbd(23 downto 16);
+    hid_kb_dat2 <= kbd(31 downto 24);
+    hid_kb_dat3 <= kbd(39 downto 32);
+    hid_kb_dat4 <= kbd(47 downto 40);
+    hid_kb_dat5 <= kbd(55 downto 48);
+    joy_l <= joy_l16(12 downto 0);
+    joy_r <= joy_r16(12 downto 0);
+
+    -- the roms of the core file (kind 0) and the .256 of the FL item (kind 2)
+    romloader_act <= ld_active when ld_kind = "00" else '0';
+    romloader_wr <= ld_wr when ld_kind = "00" else '0';
+    romloader_a <= ld_addr;
+    romloader_do <= ld_data;
+    fileloader_act <= ld_active when ld_kind = "10" else '0';
+    fileloader_wr <= ld_wr when ld_kind = "10" else '0';
+    fileloader_a <= ld_addr;
+    fileloader_do <= ld_data;
+end generate G_MCU2;
 
 -- USB HID parser / transformer to 8x5 matrix + joy mapper on keyboard
 U10: entity work.hid_parser
@@ -703,6 +849,7 @@ port map (
     KB_DO               => kb_do
 );
 
+G_SOFTSW1: if LINK = 1 generate
 -- Soft switches of the OSD (karabas-go-modules kg_soft_switches): register n is the osd item n of the
 -- core json (core.json, core_mini.json and core_minig.json have the same items)
 U11: entity work.kg_soft_switches
@@ -715,6 +862,7 @@ port map (
     regs                => softsw_regs,
     upd                 => open
 );
+end generate G_SOFTSW1;
 kb_joy_type_l <= softsw_regs(4*8+2 downto 4*8);    -- Joystick L
 kb_joy_type_r <= softsw_regs(5*8+2 downto 5*8);    -- Joystick R
 kb_video_mode <= softsw_regs(6*8);                 -- GFX 256
@@ -724,6 +872,9 @@ kb_pause      <= softsw_regs(9*8);                 -- Pause
 kb_nmi        <= softsw_regs(10*8);                -- NMI
 kb_reset      <= softsw_regs(11*8);                -- Reset
 
+vga_rgb_core <= vga_r & vga_g & vga_b;
+
+G_OSD1: if LINK = 1 generate
 -- OSD (karabas-go-modules kg_osd_overlay) on the VGA clock. OSD_COMMAND comes from the clock of the mcu
 -- link: taken when two samples in a row are the same, so a word caught while it changes is not a command.
 process (clk_vga)
@@ -737,9 +888,7 @@ begin
     end if;
 end process;
 
-vga_rgb_core <= vga_r & vga_g & vga_b;
-
-U12: entity work.kg_osd_overlay
+U12: kg_osd_overlay
 generic map (
     H_OFFSET            => 78,    -- the window (512 x 416) in the middle of 720x576
     V_OFFSET            => 60
@@ -752,6 +901,38 @@ port map (
     vsync_i             => sync_vsync,
     osd_command         => osd_command_vga
 );
+VGA_HS         <= sync_hsync;
+VGA_VS         <= sync_vsync;
+VGA_BLANK      <= sync_blank;
+end generate G_OSD1;
+
+-- the OSD of link v2 (kg_l2_osd_overlay) on the VGA clock, its bitmap and settings from the mcu clock; the
+-- syncs go out with its picture (2 clocks later)
+G_OSD2: if LINK = 2 generate
+    signal hs_o, vs_o, de_o : std_logic;
+begin
+    U12: entity work.kg_l2_osd_overlay
+    port map (
+        wclk => clk_sdram,
+        osd_wr => osd2_wr, osd_waddr => osd2_waddr, osd_wdata => osd2_wdata, osd_en => osd2_en,
+        osd_fg => osd2_fg, osd_bg => osd2_bg, osd_alpha => osd2_alpha, osd_px => osd2_px,
+        osd_py => osd2_py, osd_pw => osd2_pw, osd_ph => osd2_ph, osd_place => osd2_place,
+        osd_zoom => osd2_zoom,
+        icon_on => x"00", icon_act => x"00",
+        clk => clk_vga,
+        rgb_i => vga_rgb_core,
+        hs_i => sync_hsync,
+        vs_i => sync_vsync,
+        de_i => not sync_blank,
+        rgb_o => VGA_RGB,
+        hs_o => hs_o,
+        vs_o => vs_o,
+        de_o => de_o
+    );
+    VGA_HS <= hs_o;
+    VGA_VS <= vs_o;
+    VGA_BLANK <= not de_o;
+end generate G_OSD2;
 
 -------------------------------------------------------------------------------
 -- Формирование глобальных сигналов
@@ -942,9 +1123,6 @@ BEEPER         <= port_xxfe_reg(4);
 CLK_BUS        <= clk_sdram;
 CLK_SDR_OUT    <= clk_sdram_out;
 
-VGA_HS         <= sync_hsync;
-VGA_VS         <= sync_vsync;
-VGA_BLANK      <= sync_blank;
 
 -------------------------------------------------------------------------------
 -- File loader (load game data into 8 cpus, load regs from snapshot)
