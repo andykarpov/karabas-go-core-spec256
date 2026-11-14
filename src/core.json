@@ -17,7 +17,7 @@
     },
     "osd": [
     {"type": "P", "name": "Please choose a snapshot to"},
-    {"type": "P", "name": "load into the the RAM"},
+    {"type": "P", "name": "load into the RAM"},
     {"type": "FL", "name": "Snapshot", "slot": 1, "extensions": ".256", "hotkey": "Menu+T"},
     {"type": "P", "name": ""},
     {"type": "S", "name": "Joystick L", "options": ["Kempston", "Sinclair1", "Sinclair2", "Cursor", "QAOPM", "QAOPS"], "default": 0, "hotkey": "Menu+J"},
