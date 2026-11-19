@@ -200,10 +200,10 @@ port map(
 	 MWR_N				 => MWR_N
 );
 
--- VGA: the video DAC, clocked on the falling edge of clk_vga
+-- the pixel clock of the VGA DAC, inverted: the DAC takes the pixel on the rising V_CLK, the middle of the pixel
 u_vclk: ODDR2
 generic map(DDR_ALIGNMENT => "NONE", INIT => '0', SRTYPE => "SYNC")
-port map(Q => V_CLK, C0 => clk_vga, C1 => not(clk_vga), CE => '1', D0 => '1', D1 => '0', R => '0', S => '0');
+port map(Q => V_CLK, C0 => clk_vga, C1 => not(clk_vga), CE => '1', D0 => '0', D1 => '1', R => '0', S => '0');
 VGA_R               <= vid_rgb(23 downto 16);
 VGA_G               <= vid_rgb(15 downto 8);
 VGA_B               <= vid_rgb(7 downto 0);
